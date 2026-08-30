@@ -334,8 +334,8 @@
                     if (msg.success) {
                         if (this.range === 'realtime') {
                             this.realtimeOverview = msg.obj;
-                            // 实时模式下 overview 只供 P3/P4 与节点命名使用
-                            this.renderHistoryAux();
+                            // 节点列表就绪后立即重绘实时图，避免 F5 后"每节点速率"短暂空白
+                            this.renderRealtimeCharts();
                         } else {
                             this.overview = msg.obj;
                             this.renderOverviewCharts();

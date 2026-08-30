@@ -23,9 +23,9 @@ func (a *TrafficController) initRouter(g *gin.RouterGroup) {
 	g.POST("/history", a.history)
 }
 
-// realtime 返回最近 30 分钟的秒级网速采样(各节点 + 整机)
+// realtime 返回最近 30 分钟的秒级网速采样(各节点 + 整机),附带节点名称映射
 func (a *TrafficController) realtime(c *gin.Context) {
-	jsonObj(c, service.GetTrafficRecorder().GetRecent(), nil)
+	jsonObj(c, service.GetTrafficRecorder().GetRecentResult(), nil)
 }
 
 // history 返回 [start, end) 区间的历史流量,granularity 为 hour 或 day

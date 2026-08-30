@@ -120,7 +120,13 @@
                 if (!msg.success) {
                     return;
                 }
-                const samples = msg.obj || [];
+                const result = msg.obj || {};
+                const samples = result.samples || [];
+                // tag -> 节点展示名称(备注(端口)),映射缺失时退回 tag
+                const nodeNames = {};
+                for (const n of (result.nodes || [])) {
+                    nodeNames[n.tag] = this.nodeName(n);
+                }
                 if (samples.length > 0) {
                     const last = samples[samples.length - 1];
                     this.currentUp = last.up;
@@ -153,8 +159,9 @@
                     {name: '整机下行', type: 'line', showSymbol: false, data: totalDown, lineStyle: {width: 2.5}},
                 ];
                 for (const tag in nodeUps) {
-                    series.push({name: tag + ' ↑', type: 'line', showSymbol: false, data: nodeUps[tag], lineStyle: {width: 1}});
-                    series.push({name: tag + ' ↓', type: 'line', showSymbol: false, data: nodeDowns[tag], lineStyle: {width: 1}});
+                    const label = nodeNames[tag] || tag;
+                    series.push({name: label + ' ↑', type: 'line', showSymbol: false, data: nodeUps[tag], lineStyle: {width: 1}});
+                    series.push({name: label + ' ↓', type: 'line', showSymbol: false, data: nodeDowns[tag], lineStyle: {width: 1}});
                 }
                 this.realtimeChart.setOption({
                     animation: false,

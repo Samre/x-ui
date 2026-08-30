@@ -47,6 +47,19 @@ type NodeSeries struct {
 	Points []SeriesPoint `json:"points"`
 }
 
+// NodeMeta 节点 tag 到展示名称的映射信息
+type NodeMeta struct {
+	Tag    string `json:"tag"`
+	Remark string `json:"remark"`
+	Port   int    `json:"port"`
+}
+
+// RealtimeResult 实时接口响应:采样序列 + 节点名称映射
+type RealtimeResult struct {
+	Samples []RealtimeSample `json:"samples"`
+	Nodes   []NodeMeta       `json:"nodes"`
+}
+
 // HistoryResult 历史报表数据:各节点 + 整机汇总
 type HistoryResult struct {
 	Granularity string        `json:"granularity"`
@@ -157,6 +170,22 @@ func (r *TrafficRecorder) GetRecent() []RealtimeSample {
 	recent := make([]RealtimeSample, len(r.recent))
 	copy(recent, r.recent)
 	return recent
+}
+
+// GetRecentResult 返回实时缓冲并附带 tag 到节点名称的映射,
+// 让前端曲线图例显示节点备注而非 Xray 内部 tag
+func (r *TrafficRecorder) GetRecentResult() *RealtimeResult {
+	samples := r.GetRecent()
+	nodes := make([]NodeMeta, 0)
+	inboundService := InboundService{}
+	if inbounds, err := inboundService.GetAllInbounds(); err == nil {
+		for _, in := range inbounds {
+			nodes = append(nodes, NodeMeta{Tag: in.Tag, Remark: in.Remark, Port: in.Port})
+		}
+	} else {
+		logger.Warning("get inbounds for realtime traffic failed:", err)
+	}
+	return &RealtimeResult{Samples: samples, Nodes: nodes}
 }
 
 // GetHistory 查询 [start, end) 区间内的快照并按粒度在内存中分桶聚合,

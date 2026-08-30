@@ -120,13 +120,12 @@ class XrayCommonClass {
 }
 
 class TcpStreamSettings extends XrayCommonClass {
-    constructor(acceptProxyProtocol=false,
-                type='none',
+    // 新版 Xray-core 已移除 tcpSettings 的 acceptProxyProtocol，不再下发该字段
+    constructor(type='none',
                 request=new TcpStreamSettings.TcpRequest(),
                 response=new TcpStreamSettings.TcpResponse(),
                 ) {
         super();
-        this.acceptProxyProtocol = acceptProxyProtocol;
         this.type = type;
         this.request = request;
         this.response = response;
@@ -137,7 +136,7 @@ class TcpStreamSettings extends XrayCommonClass {
         if (!header) {
             header = {};
         }
-        return new TcpStreamSettings(json.acceptProxyProtocol,
+        return new TcpStreamSettings(
             header.type,
             TcpStreamSettings.TcpRequest.fromJson(header.request),
             TcpStreamSettings.TcpResponse.fromJson(header.response),
@@ -146,7 +145,6 @@ class TcpStreamSettings extends XrayCommonClass {
 
     toJson() {
         return {
-            acceptProxyProtocol: this.acceptProxyProtocol,
             header: {
                 type: this.type,
                 request: this.type === 'http' ? this.request.toJson() : undefined,
@@ -306,9 +304,9 @@ class KcpStreamSettings extends XrayCommonClass {
 }
 
 class WsStreamSettings extends XrayCommonClass {
-    constructor(acceptProxyProtocol=false, path='/', headers=[]) {
+    // 新版 Xray-core 已移除 wsSettings 的 acceptProxyProtocol，不再下发该字段
+    constructor(path='/', headers=[]) {
         super();
-        this.acceptProxyProtocol = acceptProxyProtocol;
         this.path = path;
         this.headers = headers;
     }
@@ -332,7 +330,6 @@ class WsStreamSettings extends XrayCommonClass {
 
     static fromJson(json={}) {
         return new WsStreamSettings(
-            json.acceptProxyProtocol,
             json.path,
             XrayCommonClass.toHeaders(json.headers),
         );
@@ -340,7 +337,6 @@ class WsStreamSettings extends XrayCommonClass {
 
     toJson() {
         return {
-            acceptProxyProtocol: this.acceptProxyProtocol,
             path: this.path,
             headers: XrayCommonClass.toV2Headers(this.headers, false),
         };

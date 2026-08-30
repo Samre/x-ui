@@ -1,17 +1,19 @@
 package job
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"os"
-
+	"strings"
 	"time"
 
 	"x-ui/logger"
 	"x-ui/util/common"
 	"x-ui/web/service"
-
-	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
 
 type LoginStatus byte
@@ -32,29 +34,67 @@ func NewStatsNotifyJob() *StatsNotifyJob {
 	return new(StatsNotifyJob)
 }
 
-func (j *StatsNotifyJob) SendMsgToTgbot(msg string) {
-	//Telegram bot basic info
-	tgBottoken, err := j.settingService.GetTgBotToken()
-	if err != nil {
-		logger.Warning("sendMsgToTgbot failed,GetTgBotToken fail:", err)
+// SendPushPlusMsg 通过 pushplus 微信推送渠道发送消息
+func (j *StatsNotifyJob) SendPushPlusMsg(msg string) {
+	enabled, err := j.settingService.GetPushPlusEnable()
+	if err != nil || !enabled {
 		return
 	}
-	tgBotid, err := j.settingService.GetTgBotChatId()
+	token, err := j.settingService.GetPushPlusToken()
 	if err != nil {
-		logger.Warning("sendMsgToTgbot failed,GetTgBotChatId fail:", err)
+		logger.Warning("sendMsgToPushPlus failed,GetPushPlusToken fail:", err)
+		return
+	}
+	if token == "" {
+		logger.Warning("sendMsgToPushPlus failed,pushPlusToken is empty")
 		return
 	}
 
-	bot, err := tgbotapi.NewBotAPI(tgBottoken)
+	title := strings.TrimSpace(msg)
+	if idx := strings.IndexAny(title, "\r\n"); idx > 0 {
+		title = strings.TrimSpace(title[:idx])
+	}
+
+	postData, err := json.Marshal(map[string]string{
+		"token":    token,
+		"title":    title,
+		"content":  msg,
+		"template": "txt",
+	})
 	if err != nil {
-		fmt.Println("get tgbot error:", err)
+		logger.Warning("sendMsgToPushPlus failed,marshal post data error:", err)
 		return
 	}
-	bot.Debug = true
-	fmt.Printf("Authorized on account %s", bot.Self.UserName)
-	info := tgbotapi.NewMessage(int64(tgBotid), msg)
-	//msg.ReplyToMessageID = int(tgBotid)
-	bot.Send(info)
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Post("https://www.pushplus.plus/send", "application/json", bytes.NewBuffer(postData))
+	if err != nil {
+		logger.Warning("sendMsgToPushPlus failed,request pushplus error:", err)
+		return
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		logger.Warning("sendMsgToPushPlus failed,read response error:", err)
+		return
+	}
+	if resp.StatusCode != http.StatusOK {
+		logger.Warning("sendMsgToPushPlus failed,http status:", resp.StatusCode, "body:", string(respBody))
+		return
+	}
+	var result struct {
+		Code int    `json:"code"`
+		Msg  string `json:"msg"`
+	}
+	if err := json.Unmarshal(respBody, &result); err != nil {
+		logger.Warning("sendMsgToPushPlus failed,unmarshal response error:", err)
+		return
+	}
+	if result.Code != 200 {
+		logger.Warning("sendMsgToPushPlus failed,pushplus code:", result.Code, "msg:", result.Msg)
+		return
+	}
+	logger.Info("sendMsgToPushPlus success")
 }
 
 //Here run is a interface method of Job interface
@@ -113,7 +153,7 @@ func (j *StatsNotifyJob) Run() {
 			info += fmt.Sprintf("到期时间:%s\r\n \r\n", time.Unix((inbound.ExpiryTime/1000), 0).Format("2006-01-02 15:04:05"))
 		}
 	}
-	j.SendMsgToTgbot(info)
+	j.SendPushPlusMsg(info)
 }
 
 func (j *StatsNotifyJob) UserLoginNotify(username string, ip string, time string, status LoginStatus) {
@@ -136,5 +176,5 @@ func (j *StatsNotifyJob) UserLoginNotify(username string, ip string, time string
 	msg += fmt.Sprintf("时间:%s\r\n", time)
 	msg += fmt.Sprintf("用户:%s\r\n", username)
 	msg += fmt.Sprintf("IP:%s\r\n", ip)
-	j.SendMsgToTgbot(msg)
+	j.SendPushPlusMsg(msg)
 }

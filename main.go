@@ -116,66 +116,6 @@ func showSetting(show bool) {
 	}
 }
 
-func updateTgbotEnableSts(status bool) {
-	settingService := service.SettingService{}
-	currentTgSts, err := settingService.GetTgbotenabled()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-	logger.Infof("current enabletgbot status[%v],need update to status[%v]", currentTgSts, status)
-	if currentTgSts != status {
-		err := settingService.SetTgbotenabled(status)
-		if err != nil {
-			fmt.Println(err)
-			return
-		} else {
-			logger.Infof("SetTgbotenabled[%v] success", status)
-		}
-	}
-	return
-}
-
-func updateTgbotSetting(tgBotToken string, tgBotChatid int, tgBotRuntime string) {
-	err := database.InitDB(config.GetDBPath())
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	settingService := service.SettingService{}
-
-	if tgBotToken != "" {
-		err := settingService.SetTgBotToken(tgBotToken)
-		if err != nil {
-			fmt.Println(err)
-			return
-		} else {
-			logger.Info("updateTgbotSetting tgBotToken success")
-		}
-	}
-
-	if tgBotRuntime != "" {
-		err := settingService.SetTgbotRuntime(tgBotRuntime)
-		if err != nil {
-			fmt.Println(err)
-			return
-		} else {
-			logger.Infof("updateTgbotSetting tgBotRuntime[%s] success", tgBotRuntime)
-		}
-	}
-
-	if tgBotChatid != 0 {
-		err := settingService.SetTgBotChatId(tgBotChatid)
-		if err != nil {
-			fmt.Println(err)
-			return
-		} else {
-			logger.Info("updateTgbotSetting tgBotChatid success")
-		}
-	}
-}
-
 func updateSetting(port int, username string, password string) {
 	err := database.InitDB(config.GetDBPath())
 	if err != nil {
@@ -223,10 +163,6 @@ func main() {
 	var port int
 	var username string
 	var password string
-	var tgbottoken string
-	var tgbotchatid int
-	var enabletgbot bool
-	var tgbotRuntime string
 	var reset bool
 	var show bool
 	settingCmd.BoolVar(&reset, "reset", false, "reset all settings")
@@ -234,10 +170,6 @@ func main() {
 	settingCmd.IntVar(&port, "port", 0, "set panel port")
 	settingCmd.StringVar(&username, "username", "", "set login username")
 	settingCmd.StringVar(&password, "password", "", "set login password")
-	settingCmd.StringVar(&tgbottoken, "tgbottoken", "", "set telegrame bot token")
-	settingCmd.StringVar(&tgbotRuntime, "tgbotRuntime", "", "set telegrame bot cron time")
-	settingCmd.IntVar(&tgbotchatid, "tgbotchatid", 0, "set telegrame bot chat id")
-	settingCmd.BoolVar(&enabletgbot, "enabletgbot", false, "enable telegram bot notify")
 
 	oldUsage := flag.Usage
 	flag.Usage = func() {
@@ -286,9 +218,6 @@ func main() {
 		}
 		if show {
 			showSetting(show)
-		}
-		if (tgbottoken != "") || (tgbotchatid != 0) || (tgbotRuntime != "") {
-			updateTgbotSetting(tgbottoken, tgbotchatid, tgbotRuntime)
 		}
 	default:
 		fmt.Println("except 'run' or 'v2-ui' or 'setting' subcommands")

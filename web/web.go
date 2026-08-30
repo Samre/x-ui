@@ -297,14 +297,14 @@ func (s *Server) startTask() {
 	s.cron.AddJob("@every 30s", job.NewCheckInboundJob())
 	// 每一天提示一次流量情况,上海时间8点30
 	var entry cron.EntryID
-	isTgbotenabled, err := s.settingService.GetTgbotenabled()
-	if (err == nil) && (isTgbotenabled) {
-		runtime, err := s.settingService.GetTgbotRuntime()
+	isPushPlusEnabled, err := s.settingService.GetPushPlusEnable()
+	if err == nil && isPushPlusEnabled {
+		runtime, err := s.settingService.GetPushPlusRuntime()
 		if err != nil || runtime == "" {
 			logger.Errorf("Add NewStatsNotifyJob error[%s],Runtime[%s] invalid,wil run default", err, runtime)
 			runtime = "@daily"
 		}
-		logger.Infof("Tg notify enabled,run at %s", runtime)
+		logger.Infof("PushPlus notify enabled,run at %s", runtime)
 		entry, err = s.cron.AddJob(runtime, job.NewStatsNotifyJob())
 		if err != nil {
 			logger.Warning("Add NewStatsNotifyJob error", err)

@@ -9,6 +9,7 @@
 - 支持的协议：vmess、vless、trojan、shadowsocks、dokodemo-door、socks、http
 - 支持配置更多传输配置
 - 流量统计，限制流量，限制到期时间
+- 流量统计报表:实时网速曲线 + 24小时/7天/15天历史流量(按节点分别统计与整机汇总)
 - 可自定义 xray 配置模板
 - 支持 https 访问面板（自备域名 + ssl 证书）
 - 支持一键SSL证书申请且自动续签

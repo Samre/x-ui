@@ -41,9 +41,19 @@ const RULE_DOMAIN = {
 };
 
 const FLOW_CONTROL = {
-    ORIGIN: "xtls-rprx-origin",
-    DIRECT: "xtls-rprx-direct",
+    VISION: "xtls-rprx-vision",
 };
+
+// 新版 Xray-core 已移除旧的 xtls-rprx-origin / xtls-rprx-direct，
+// 旧配置读入时归一为无 flow，避免保存后 xray 启动失败
+const LEGACY_FLOW_CONTROLS = ["xtls-rprx-origin", "xtls-rprx-direct"];
+
+function normalizeFlowControl(flow) {
+    if (!flow || LEGACY_FLOW_CONTROLS.indexOf(flow) >= 0) {
+        return "";
+    }
+    return flow;
+}
 
 Object.freeze(Protocols);
 Object.freeze(VmessMethods);
@@ -1009,7 +1019,10 @@ class Inbound extends XrayCommonClass {
         }
 
         if (this.xtls) {
-            params.set("flow", this.settings.vlesses[0].flow);
+            const flow = this.settings.vlesses[0].flow;
+            if (!ObjectUtil.isEmpty(flow)) {
+                params.set("flow", flow);
+            }
         }
 
         const link = `vless://${uuid}@${address}:${port}`;
@@ -1209,16 +1222,27 @@ Inbound.VLESSSettings = class extends Inbound.Settings {
 };
 Inbound.VLESSSettings.VLESS = class extends XrayCommonClass {
 
-    constructor(id=RandomUtil.randomUUID(), flow=FLOW_CONTROL.DIRECT) {
+    constructor(id=RandomUtil.randomUUID(), flow="") {
         super();
         this.id = id;
         this.flow = flow;
     }
 
+    toJson() {
+        const json = {
+            id: this.id,
+        };
+        // flow 仅在启用 xtls 时有意义，为空时不下发，避免新版 Xray 校验失败
+        if (!ObjectUtil.isEmpty(this.flow)) {
+            json.flow = this.flow;
+        }
+        return json;
+    }
+
     static fromJson(json={}) {
         return new Inbound.VLESSSettings.VLESS(
             json.id,
-            json.flow,
+            normalizeFlowControl(json.flow),
         );
     }
 };
@@ -1297,23 +1321,26 @@ Inbound.TrojanSettings = class extends Inbound.Settings {
     }
 };
 Inbound.TrojanSettings.Client = class extends XrayCommonClass {
-    constructor(password=RandomUtil.randomSeq(10), flow=FLOW_CONTROL.DIRECT) {
+    constructor(password=RandomUtil.randomSeq(10), flow="") {
         super();
         this.password = password;
         this.flow = flow;
     }
 
     toJson() {
-        return {
+        const json = {
             password: this.password,
-            flow: this.flow,
         };
+        if (!ObjectUtil.isEmpty(this.flow)) {
+            json.flow = this.flow;
+        }
+        return json;
     }
 
     static fromJson(json={}) {
         return new Inbound.TrojanSettings.Client(
             json.password,
-            json.flow,
+            normalizeFlowControl(json.flow),
         );
     }
 

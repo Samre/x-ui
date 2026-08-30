@@ -68,8 +68,8 @@ type Setting struct {
 // TrafficSnapshot 每分钟落一次库的入站流量增量，用于流量统计报表
 type TrafficSnapshot struct {
 	Id         int    `json:"id" gorm:"primaryKey;autoIncrement"`
-	InboundTag string `json:"inboundTag" gorm:"index:idx_traffic_tag_time"`
+	InboundTag string `json:"inboundTag" gorm:"index:idx_traffic_snapshot_tag_time"`
 	Up         int64  `json:"up"`
 	Down       int64  `json:"down"`
-	CreatedAt  int64  `json:"createdAt" gorm:"index:idx_traffic_tag_time"`
+	CreatedAt  int64  `json:"createdAt" gorm:"index:idx_traffic_snapshot_tag_time"`
 }

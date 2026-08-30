@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path"
+	"strings"
 	"x-ui/config"
 	"x-ui/database/model"
 )
@@ -42,7 +43,16 @@ func initSetting() error {
 }
 
 func initTrafficSnapshot() error {
-	return db.AutoMigrate(&model.TrafficSnapshot{})
+	err := db.AutoMigrate(&model.TrafficSnapshot{})
+	if err != nil {
+		// 兼容运行过 0.5.x 的旧库：SQLite 索引名全库唯一，残留同名索引等
+		// "already exists" 错误不影响新表功能，不阻断启动
+		if strings.Contains(err.Error(), "already exists") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func InitDB(dbPath string) error {

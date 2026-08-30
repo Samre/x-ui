@@ -404,16 +404,9 @@
                 }, true);
 
                 const times = samples.map(s => s.time);
-                const tagSet = {};
-                this.nodeOptions.forEach(m => {
-                    tagSet[m.tag] = true;
-                });
-                samples.forEach(s => {
-                    Object.keys(s.nodes).forEach(t => {
-                        tagSet[t] = true;
-                    });
-                });
-                this.renderNodeLines(times, 'HH:mm', Object.keys(tagSet),
+                // 只画现存的入站：已删除节点的 tag 即使还留在 30 分钟样本里也不再显示
+                const tags = this.nodeOptions.map(m => m.tag);
+                this.renderNodeLines(times, 'HH:mm', tags,
                     tag => samples.map(s => (s.nodes[tag] ? s.nodes[tag].up : null)),
                     tag => samples.map(s => (s.nodes[tag] ? s.nodes[tag].down : null)),
                     true);

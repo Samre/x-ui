@@ -368,7 +368,8 @@ func (s *TrafficPanelService) GetOverview(rangeKey string, inboundService *Inbou
 		dailyBuckets, dailyAccs = bucketize(rows, start, end, GranularityDay, loc)
 	}
 
-	// 范围内每节点总量，用于 Top 排行与图例排序
+	// 范围内每节点总量，用于 Top 排行与图例排序；
+	// 已删除的入站不再参与每节点序列与排行（整机总量仍计入其历史流量）
 	rangeAgg := map[string]*nodeDelta{}
 	for _, acc := range mainAccs {
 		for tag, delta := range acc.Nodes {
@@ -381,8 +382,15 @@ func (s *TrafficPanelService) GetOverview(rangeKey string, inboundService *Inbou
 			d.Down += delta.Down
 		}
 	}
+	existingTags := map[string]bool{}
+	for _, meta := range metas {
+		existingTags[meta.Tag] = true
+	}
 	tags := make([]string, 0, len(rangeAgg))
 	for tag := range rangeAgg {
+		if !existingTags[tag] {
+			continue
+		}
 		tags = append(tags, tag)
 	}
 	sort.Slice(tags, func(i, j int) bool {
@@ -390,13 +398,6 @@ func (s *TrafficPanelService) GetOverview(rangeKey string, inboundService *Inbou
 		tj := rangeAgg[tags[j]].Up + rangeAgg[tags[j]].Down
 		return ti > tj
 	})
-
-	// 出现过但已被删除的入站也需要图例名称
-	for _, row := range rows {
-		if _, ok := nameMap[row.InboundTag]; !ok {
-			nameMap[row.InboundTag] = row.InboundTag
-		}
-	}
 
 	top := make([]TopItem, 0, len(tags))
 	for i, tag := range tags {

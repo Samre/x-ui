@@ -293,6 +293,12 @@ func (s *Server) startTask() {
 		s.cron.AddJob("@every 10s", job.NewXrayTrafficJob())
 	}()
 
+	go func() {
+		time.Sleep(time.Second * 15)
+		// 每 1 分钟把流量增量落库，延迟 15 秒启动以错开 XrayTrafficJob
+		s.cron.AddJob("@every 1m", job.NewTrafficPersistJob())
+	}()
+
 	// 每 30 秒检查一次 inbound 流量超出和到期的情况
 	s.cron.AddJob("@every 30s", job.NewCheckInboundJob())
 	// 每一天提示一次流量情况,上海时间8点30

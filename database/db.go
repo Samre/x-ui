@@ -41,6 +41,10 @@ func initSetting() error {
 	return db.AutoMigrate(&model.Setting{})
 }
 
+func initTrafficSnapshot() error {
+	return db.AutoMigrate(&model.TrafficSnapshot{})
+}
+
 func InitDB(dbPath string) error {
 	dir := path.Dir(dbPath)
 	err := os.MkdirAll(dir, fs.ModeDir)
@@ -73,6 +77,10 @@ func InitDB(dbPath string) error {
 		return err
 	}
 	err = initSetting()
+	if err != nil {
+		return err
+	}
+	err = initTrafficSnapshot()
 	if err != nil {
 		return err
 	}

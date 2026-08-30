@@ -27,4 +27,6 @@ func (j *XrayTrafficJob) Run() {
 	if err != nil {
 		logger.Warning("add traffic failed:", err)
 	}
+	// 同步喂给流量统计面板（实时缓冲 + 每分钟落库）
+	service.GetTrafficPanelService().Record(traffics)
 }

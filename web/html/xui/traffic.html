@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+{{template "head" .}}
+<style>
+    @media (min-width: 769px) {
+        .ant-layout-content {
+            margin: 24px 16px;
+        }
+    }
+
+    .toolbar-card .ant-card-body {
+        padding: 14px 24px;
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+    }
+
+    .last-update {
+        margin-left: auto;
+        color: #8c9196;
+        font-size: 12px;
+    }
+
+    .traffic-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
+        gap: 16px;
+        margin-top: 16px;
+    }
+
+    .panel-card .ant-card-head {
+        min-height: 44px;
+        padding: 0 16px;
+    }
+
+    .panel-card .ant-card-head-title {
+        padding: 10px 0;
+        font-size: 14px;
+    }
+
+    .panel-card .ant-card-extra {
+        padding: 10px 0;
+    }
+
+    .panel-card .ant-card-body {
+        padding: 4px 8px 8px;
+    }
+
+    .panel-kpi {
+        font-size: 12px;
+        color: #5a6473;
+    }
+
+    .panel-kpi .kpi-up {
+        color: #2f6fe4;
+        font-weight: 600;
+    }
+
+    .panel-kpi .kpi-down {
+        color: #159a6c;
+        font-weight: 600;
+    }
+
+    .chart-wrap {
+        position: relative;
+    }
+
+    .chart-box {
+        width: 100%;
+        height: 310px;
+    }
+
+    .chart-empty {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.75);
+    }
+</style>
+<body>
+<a-layout id="app" v-cloak>
+    {{ template "commonSider" . }}
+    <a-layout id="content-layout">
+        <a-layout-content>
+            <a-card class="toolbar-card">
+                <a-radio-group v-model="range" button-style="solid">
+                    <a-radio-button v-for="r in ranges" :key="r.key" :value="r.key">[[ r.label ]]</a-radio-button>
+                </a-radio-group>
+                <a-select v-model="nodeTag" allow-clear show-search option-filter-prop="children"
+                          style="width: 240px; margin-left: 16px" placeholder="全部节点">
+                    <a-select-option v-for="n in nodeOptions" :key="n.tag" :value="n.tag">[[ n.name ]]</a-select-option>
+                </a-select>
+                <a-button v-if="range === 'realtime'" style="margin-left: 16px" @click="paused = !paused">
+                    <a-icon :type="paused ? 'play-circle' : 'pause-circle'"></a-icon>
+                    [[ paused ? '继续刷新' : '暂停刷新' ]]
+                </a-button>
+                <a-button style="margin-left: 16px" :loading="refreshing" @click="refresh">刷新</a-button>
+                <span class="last-update">[[ lastUpdate ]]</span>
+            </a-card>
+            <a-spin :spinning="refreshing">
+                <div class="traffic-grid">
+                    <a-card class="panel-card" size="small">
+                        <template slot="title">[[ p1Title ]]</template>
+                        <template slot="extra"><span class="panel-kpi" v-html="p1Kpi"></span></template>
+                        <div class="chart-wrap">
+                            <div id="chart-total" class="chart-box"></div>
+                            <div v-if="p1Empty" class="chart-empty">
+                                <a-empty description="暂无数据，等待采集"></a-empty>
+                            </div>
+                        </div>
+                    </a-card>
+                    <a-card class="panel-card" size="small">
+                        <template slot="title">[[ p2Title ]]</template>
+                        <template slot="extra"><span class="panel-kpi">实线=上行　虚线=下行</span></template>
+                        <div class="chart-wrap">
+                            <div id="chart-nodes" class="chart-box"></div>
+                            <div v-if="p2Empty" class="chart-empty">
+                                <a-empty description="暂无数据，等待采集"></a-empty>
+                            </div>
+                        </div>
+                    </a-card>
+                    <a-card class="panel-card" size="small">
+                        <template slot="title">[[ p3Title ]]</template>
+                        <template slot="extra"><span class="panel-kpi" v-html="p3Kpi"></span></template>
+                        <div class="chart-wrap">
+                            <div id="chart-daily" class="chart-box"></div>
+                            <div v-if="p3Empty" class="chart-empty">
+                                <a-empty description="暂无数据，等待采集"></a-empty>
+                            </div>
+                        </div>
+                    </a-card>
+                    <a-card class="panel-card" size="small">
+                        <template slot="title">[[ p4Title ]]</template>
+                        <template slot="extra"><span class="panel-kpi">上行 / 下行 堆叠</span></template>
+                        <div class="chart-wrap">
+                            <div id="chart-top" class="chart-box"></div>
+                            <div v-if="p4Empty" class="chart-empty">
+                                <a-empty description="暂无数据，等待采集"></a-empty>
+                            </div>
+                        </div>
+                    </a-card>
+                </div>
+            </a-spin>
+        </a-layout-content>
+    </a-layout>
+</a-layout>
+{{template "js" .}}
+<script src="{{ .base_path }}assets/echarts@5.5.1/echarts.min.js"></script>
+<script>
+
+    const UP_COLOR = '#3d7ef7';
+    const DOWN_COLOR = '#22b07d';
+    const NODE_COLORS = ['#5b8ff9', '#5ad8a6', '#f6bd16', '#e8684a', '#6dc8ec', '#9270ca', '#ff9d4d', '#269a99', '#ff99c3', '#a0d911'];
+
+    const trafficRanges = [
+        { key: 'realtime', label: '实时' },
+        { key: '24h', label: '24小时' },
+        { key: '7d', label: '7天' },
+        { key: '15d', label: '15天' },
+    ];
+    Object.freeze(trafficRanges);
+
+    function withAlpha(hex, alpha) {
+        const r = parseInt(hex.slice(1, 3), 16);
+        const g = parseInt(hex.slice(3, 5), 16);
+        const b = parseInt(hex.slice(5, 7), 16);
+        return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+    }
+
+    function areaStyle(color) {
+        return {
+            color: {
+                type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+                colorStops: [
+                    { offset: 0, color: withAlpha(color, 0.28) },
+                    { offset: 1, color: withAlpha(color, 0.02) },
+                ],
+            },
+        };
+    }
+
+    function speedFmt(v) {
+        return sizeFormat(v) + '/s';
+    }
+
+    function baseGrid() {
+        return {
+            left: 8,
+            right: 20,
+            top: 40,
+            bottom: 8,
+            containLabel: true,
+        };
+    }
+
+    function legendConf(extra) {
+        return Object.assign({
+            type: 'scroll',
+            top: 4,
+            icon: 'roundRect',
+            itemWidth: 12,
+            itemHeight: 8,
+        }, extra || {});
+    }
+
+    const app = new Vue({
+        delimiters: ['[[', ']]'],
+        el: '#app',
+        data: {
+            siderDrawer,
+            ranges: trafficRanges,
+            range: 'realtime',
+            nodeTag: undefined,
+            paused: false,
+            refreshing: false,
+            samples: [],
+            overview: null,
+            realtimeOverview: null,
+            lastUpdate: '',
+        },
+        computed: {
+            rangeLabel() {
+                const found = this.ranges.find(r => r.key === this.range);
+                return found ? found.label : '';
+            },
+            nodeOptions() {
+                const o = this.currentOverview;
+                return o ? (o.nodeList || []) : [];
+            },
+            currentOverview() {
+                return this.range === 'realtime' ? this.realtimeOverview : this.overview;
+            },
+            p1Title() {
+                return this.range === 'realtime' ? '整机速率（近 30 分钟）' : '整机流量 · ' + this.rangeLabel;
+            },
+            p2Title() {
+                return this.range === 'realtime' ? '每节点速率（近 30 分钟）' : '每节点流量 · ' + this.rangeLabel;
+            },
+            p3Title() {
+                if (this.range === '24h') {
+                    return '每小时用量';
+                }
+                return this.range === 'realtime' ? '每日用量（近 7 天）' : '每日用量 · ' + this.rangeLabel;
+            },
+            p4Title() {
+                return this.range === 'realtime' ? '节点排行（近 7 天）' : '节点排行 · ' + this.rangeLabel;
+            },
+            lastSample() {
+                if (this.samples.length === 0) {
+                    return null;
+                }
+                return this.samples[this.samples.length - 1];
+            },
+            p1Kpi() {
+                if (this.range === 'realtime') {
+                    const s = this.lastSample;
+                    if (!s) {
+                        return '';
+                    }
+                    return '<span class="kpi-up">↑ ' + speedFmt(s.up) + '</span>　<span class="kpi-down">↓ ' + speedFmt(s.down) + '</span>';
+                }
+                const o = this.overview;
+                if (!o) {
+                    return '';
+                }
+                return '本期 <b>' + sizeFormat(o.totalUp + o.totalDown) + '</b>　峰值 <span class="kpi-up">↑ ' + speedFmt(o.peakUp) + '</span> <span class="kpi-down">↓ ' + speedFmt(o.peakDown) + '</span>';
+            },
+            p3Kpi() {
+                const o = this.currentOverview;
+                if (!o) {
+                    return '';
+                }
+                return '合计 <b>' + sizeFormat(o.totalUp + o.totalDown) + '</b>';
+            },
+            p1Empty() {
+                return this.range === 'realtime' ? this.samples.length === 0 : !this.overview;
+            },
+            p2Empty() {
+                return this.p1Empty;
+            },
+            p3Empty() {
+                return !this.currentOverview;
+            },
+            p4Empty() {
+                const o = this.currentOverview;
+                return !o || !o.top || o.top.length === 0;
+            },
+        },
+        watch: {
+            range() {
+                this.onRangeChange();
+            },
+            nodeTag() {
+                this.renderAll();
+            },
+        },
+        methods: {
+            nameMap() {
+                const o = this.currentOverview;
+                const map = {};
+                if (o && o.nodeList) {
+                    o.nodeList.forEach(m => {
+                        map[m.tag] = m.name;
+                    });
+                }
+                return map;
+            },
+            tagName(tag, nameMap) {
+                return nameMap[tag] || tag;
+            },
+            visibleTags(tags) {
+                if (!this.nodeTag) {
+                    return tags;
+                }
+                return tags.filter(t => t === this.nodeTag);
+            },
+            async loadRealtime() {
+                const msg = await HttpUtil.post(basePath + 'xui/traffic/realtime');
+                if (msg.success) {
+                    this.samples = (msg.obj && msg.obj.samples) || [];
+                    this.lastUpdate = '更新于 ' + moment().format('HH:mm:ss');
+                    this.renderRealtimeCharts();
+                }
+            },
+            async loadOverview(rangeKey) {
+                this.refreshing = true;
+                try {
+                    const msg = await HttpUtil.post(basePath + 'xui/traffic/overview', { range: rangeKey });
+                    if (msg.success) {
+                        if (this.range === 'realtime') {
+                            this.realtimeOverview = msg.obj;
+                            // 实时模式下 overview 只供 P3/P4 与节点命名使用
+                            this.renderHistoryAux();
+                        } else {
+                            this.overview = msg.obj;
+                            this.renderOverviewCharts();
+                        }
+                        this.lastUpdate = '更新于 ' + moment().format('HH:mm:ss');
+                    }
+                } finally {
+                    this.refreshing = false;
+                }
+            },
+            onRangeChange() {
+                if (this.range === 'realtime') {
+                    this.loadRealtime();
+                    if (!this.realtimeOverview) {
+                        this.loadOverview('7d');
+                    }
+                } else {
+                    this.overview = null;
+                    this.loadOverview(this.range);
+                }
+            },
+            refresh() {
+                if (this.range === 'realtime') {
+                    this.loadRealtime();
+                    this.loadOverview('7d');
+                } else {
+                    this.loadOverview(this.range);
+                }
+            },
+            initCharts() {
+                this.totalChart = echarts.init(document.getElementById('chart-total'));
+                this.nodesChart = echarts.init(document.getElementById('chart-nodes'));
+                this.dailyChart = echarts.init(document.getElementById('chart-daily'));
+                this.topChart = echarts.init(document.getElementById('chart-top'));
+            },
+            resizeCharts() {
+                if (this.totalChart) {
+                    this.totalChart.resize();
+                    this.nodesChart.resize();
+                    this.dailyChart.resize();
+                    this.topChart.resize();
+                }
+            },
+            timeLabels(times, fmt) {
+                return times.map(t => moment(t * 1000).format(fmt));
+            },
+            renderRealtimeCharts() {
+                const samples = this.samples;
+                const labels = this.timeLabels(samples.map(s => s.time), 'HH:mm');
+
+                this.totalChart.setOption({
+                    animation: false,
+                    color: [UP_COLOR, DOWN_COLOR],
+                    grid: baseGrid(),
+                    tooltip: {
+                        trigger: 'axis',
+                        valueFormatter: v => speedFmt(v),
+                    },
+                    legend: legendConf(),
+                    xAxis: { type: 'category', boundaryGap: false, data: labels },
+                    yAxis: { type: 'value', axisLabel: { formatter: v => speedFmt(v) }, splitLine: { lineStyle: { type: 'dashed' } } },
+                    series: [
+                        { name: '上行', type: 'line', smooth: true, showSymbol: false, data: samples.map(s => s.up), lineStyle: { width: 2 }, areaStyle: areaStyle(UP_COLOR) },
+                        { name: '下行', type: 'line', smooth: true, showSymbol: false, data: samples.map(s => s.down), lineStyle: { width: 2 }, areaStyle: areaStyle(DOWN_COLOR) },
+                    ],
+                }, true);
+
+                const times = samples.map(s => s.time);
+                const tagSet = {};
+                this.nodeOptions.forEach(m => {
+                    tagSet[m.tag] = true;
+                });
+                samples.forEach(s => {
+                    Object.keys(s.nodes).forEach(t => {
+                        tagSet[t] = true;
+                    });
+                });
+                this.renderNodeLines(times, 'HH:mm', Object.keys(tagSet),
+                    tag => samples.map(s => (s.nodes[tag] ? s.nodes[tag].up : null)),
+                    tag => samples.map(s => (s.nodes[tag] ? s.nodes[tag].down : null)),
+                    true);
+
+                this.renderHistoryAux();
+            },
+            renderNodeLines(times, fmt, tags, getUp, getDown, isSpeed) {
+                const nameMap = this.nameMap();
+                const labels = this.timeLabels(times, fmt);
+                const series = [];
+                this.visibleTags(tags).forEach((tag, idx) => {
+                    const color = NODE_COLORS[idx % NODE_COLORS.length];
+                    const name = this.tagName(tag, nameMap);
+                    series.push({
+                        name: name + ' ↑',
+                        type: 'line',
+                        smooth: true,
+                        showSymbol: false,
+                        data: getUp(tag),
+                        lineStyle: { width: 1.6, color: color },
+                        itemStyle: { color: color },
+                        emphasis: { focus: 'series' },
+                    });
+                    series.push({
+                        name: name + ' ↓',
+                        type: 'line',
+                        smooth: true,
+                        showSymbol: false,
+                        data: getDown(tag),
+                        lineStyle: { width: 1.4, color: color, type: 'dashed', opacity: 0.8 },
+                        itemStyle: { color: color },
+                        emphasis: { focus: 'series' },
+                    });
+                });
+                this.nodesChart.setOption({
+                    animation: false,
+                    grid: baseGrid(),
+                    tooltip: {
+                        trigger: 'axis',
+                        valueFormatter: v => (isSpeed ? speedFmt(v) : sizeFormat(v)),
+                    },
+                    legend: legendConf(),
+                    xAxis: { type: 'category', boundaryGap: false, data: labels },
+                    yAxis: { type: 'value', axisLabel: { formatter: v => (isSpeed ? speedFmt(v) : sizeFormat(v)) }, splitLine: { lineStyle: { type: 'dashed' } } },
+                    series: series,
+                }, true);
+            },
+            renderOverviewCharts() {
+                const o = this.overview;
+                if (!o) {
+                    return;
+                }
+                const hour = o.granularity === 'hour';
+                const fmt = hour ? (this.range === '24h' ? 'HH:mm' : 'MM-DD HH:mm') : 'MM-DD';
+                const labels = this.timeLabels(o.total.map(p => p.time), fmt);
+
+                this.totalChart.setOption({
+                    animation: false,
+                    color: [UP_COLOR, DOWN_COLOR],
+                    grid: baseGrid(),
+                    tooltip: {
+                        trigger: 'axis',
+                        valueFormatter: v => sizeFormat(v),
+                    },
+                    legend: legendConf(),
+                    xAxis: { type: 'category', boundaryGap: false, data: labels },
+                    yAxis: { type: 'value', axisLabel: { formatter: v => sizeFormat(v) }, splitLine: { lineStyle: { type: 'dashed' } } },
+                    series: [
+                        { name: '上行', type: 'line', smooth: true, showSymbol: false, data: o.total.map(p => p.up), lineStyle: { width: 2 }, areaStyle: areaStyle(UP_COLOR) },
+                        { name: '下行', type: 'line', smooth: true, showSymbol: false, data: o.total.map(p => p.down), lineStyle: { width: 2 }, areaStyle: areaStyle(DOWN_COLOR) },
+                    ],
+                }, true);
+
+                const times = o.total.map(p => p.time);
+                this.renderNodeLines(times, fmt, o.nodes.map(n => n.tag),
+                    tag => {
+                        const ns = o.nodes.find(n => n.tag === tag);
+                        return ns ? ns.points.map(p => p.up) : [];
+                    },
+                    tag => {
+                        const ns = o.nodes.find(n => n.tag === tag);
+                        return ns ? ns.points.map(p => p.down) : [];
+                    },
+                    false);
+
+                this.renderHistoryAux();
+            },
+            renderHistoryAux() {
+                // P3 用量柱状 + P4 Top 排行；实时视图展示近 7 天数据
+                const o = this.range === 'realtime' ? this.realtimeOverview : this.overview;
+                if (!o) {
+                    return;
+                }
+                const hourly = this.range === '24h';
+                const points = hourly ? o.total : o.daily;
+                const nodes = hourly ? o.nodes : o.dailyNodes;
+                const fmt = hourly ? 'HH:00' : 'MM-DD';
+                const labels = this.timeLabels(points.map(p => p.time), fmt);
+
+                const nameMap = this.nameMap();
+                const series = [];
+                this.visibleTags(nodes.map(n => n.tag)).forEach((tag, idx) => {
+                    const color = NODE_COLORS[idx % NODE_COLORS.length];
+                    const ns = nodes.find(n => n.tag === tag);
+                    const name = this.tagName(tag, nameMap);
+                    series.push({
+                        name: name + ' ↑',
+                        type: 'bar',
+                        stack: 'up',
+                        data: ns ? ns.points.map(p => p.up) : [],
+                        itemStyle: { color: color, opacity: 0.95 },
+                        barMaxWidth: 26,
+                        emphasis: { focus: 'series' },
+                    });
+                    series.push({
+                        name: name + ' ↓',
+                        type: 'bar',
+                        stack: 'down',
+                        data: ns ? ns.points.map(p => p.down) : [],
+                        itemStyle: { color: color, opacity: 0.55 },
+                        barMaxWidth: 26,
+                        emphasis: { focus: 'series' },
+                    });
+                });
+                this.dailyChart.setOption({
+                    animation: false,
+                    grid: baseGrid(),
+                    tooltip: {
+                        trigger: 'axis',
+                        axisPointer: { type: 'shadow' },
+                        valueFormatter: v => sizeFormat(v),
+                    },
+                    legend: legendConf(),
+                    xAxis: { type: 'category', data: labels },
+                    yAxis: { type: 'value', axisLabel: { formatter: v => sizeFormat(v) }, splitLine: { lineStyle: { type: 'dashed' } } },
+                    series: series,
+                }, true);
+
+                const top = o.top.filter(item => !this.nodeTag || item.tag === this.nodeTag);
+                this.topChart.setOption({
+                    animation: false,
+                    grid: { left: 8, right: 60, top: 34, bottom: 8, containLabel: true },
+                    tooltip: {
+                        trigger: 'axis',
+                        axisPointer: { type: 'shadow' },
+                        valueFormatter: v => sizeFormat(v),
+                    },
+                    legend: legendConf(),
+                    xAxis: { type: 'value', axisLabel: { formatter: v => sizeFormat(v) }, splitLine: { lineStyle: { type: 'dashed' } } },
+                    yAxis: { type: 'category', data: top.map(t => t.name), inverse: true },
+                    series: [
+                        { name: '上行', type: 'bar', stack: 'total', data: top.map(t => t.up), itemStyle: { color: UP_COLOR }, barMaxWidth: 16 },
+                        { name: '下行', type: 'bar', stack: 'total', data: top.map(t => t.down), itemStyle: { color: DOWN_COLOR }, barMaxWidth: 16 },
+                    ],
+                }, true);
+            },
+            renderAll() {
+                if (this.range === 'realtime') {
+                    this.renderRealtimeCharts();
+                } else {
+                    this.renderOverviewCharts();
+                }
+            },
+        },
+        async mounted() {
+            await this.$nextTick();
+            this.initCharts();
+            window.addEventListener('resize', this.resizeCharts);
+            this.onRangeChange();
+            while (true) {
+                await PromiseUtil.sleep(10000);
+                if (this.range === 'realtime' && !this.paused) {
+                    try {
+                        await this.loadRealtime();
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }
+            }
+        },
+    });
+
+</script>
+</body>
+</html>

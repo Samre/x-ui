@@ -64,12 +64,3 @@ type Setting struct {
 	Key   string `json:"key" form:"key"`
 	Value string `json:"value" form:"value"`
 }
-
-// TrafficLog 按 1 分钟粒度记录每个 inbound 的流量增量,用于绘制历史报表
-type TrafficLog struct {
-	Id         int    `json:"id" gorm:"primaryKey;autoIncrement"`
-	InboundTag string `json:"inboundTag" gorm:"index:idx_traffic_tag_time"`
-	Up         int64  `json:"up"`
-	Down       int64  `json:"down"`
-	CreatedAt  int64  `json:"createdAt" gorm:"index:idx_traffic_tag_time"`
-}

@@ -27,6 +27,4 @@ func (j *XrayTrafficJob) Run() {
 	if err != nil {
 		logger.Warning("add traffic failed:", err)
 	}
-	// 流量统计报表:同样的增量进入实时缓冲与分钟级快照
-	service.GetTrafficRecorder().Record(traffics)
 }

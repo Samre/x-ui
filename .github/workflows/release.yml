@@ -158,7 +158,41 @@ jobs:
     needs: [release, linuxamd64build, linuxarm64build, linuxs390xbuild]
     runs-on: ubuntu-latest
     steps:
+      # 用"上一版已发布的 release → 本次 tag"之间的提交标题自动生成更新日志
+      # （本仓库直接提交 main、不走 PR，--generate-notes 只会给一个 compare 链接）
+      - name: Generate release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          notes=RELEASE_NOTES.md
+          # 注意：gh api 失败时会把错误 JSON 打到 stdout，所以必须用退出码判断，
+          # 不能只靠 "|| true"（否则 404 的 JSON 会被当成变更内容写进说明）
+          prev=""
+          if out="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=30" \
+              --jq '[.[] | select(.draft == false and .prerelease == false)][0].tag_name' 2>/dev/null)"; then
+            prev="${out}"
+          fi
+          changes=""
+          if [ -n "${prev}" ] && [ "${prev}" != "${GITHUB_REF_NAME}" ]; then
+            if out="$(gh api "repos/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_REF_NAME}" \
+                --jq '.commits[] | "- " + (.commit.message | split("\n")[0])' 2>/dev/null)"; then
+              changes="${out}"
+            fi
+          fi
+          {
+            echo "## ${GITHUB_REF_NAME}"
+            echo
+            echo "### 变更"
+            if [ -n "${changes}" ]; then
+              printf '%s\n' "${changes}"
+              echo
+              echo "**Full Changelog**: https://github.com/${GITHUB_REPOSITORY}/compare/${prev}...${GITHUB_REF_NAME}"
+            else
+              echo "- 详见提交记录：https://github.com/${GITHUB_REPOSITORY}/commits/${GITHUB_REF_NAME}"
+            fi
+          } > "${notes}"
+          cat "${notes}"
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --draft=false --prerelease=false
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --notes-file RELEASE_NOTES.md --draft=false --prerelease=false

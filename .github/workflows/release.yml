@@ -148,3 +148,17 @@ jobs:
           asset_path: x-ui-linux-s390x.tar.gz
           asset_name: x-ui-linux-s390x.tar.gz
           asset_content_type: application/gzip
+  # 三个架构的产物都上传完成后，才把 release 从 draft 正式发布出去：
+  # 这样 releases/latest（install.sh 用的接口）不会在任何时刻指向一个还没有附件的 release，
+  # 同时"推 tag 即完成正式发布"，不再需要手动点发布。
+  # 若本步骤失败，release 仍停在 draft（与改动前行为一致），手动发布即可。
+  publish:
+    name: publish release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [release, linuxamd64build, linuxarm64build, linuxs390xbuild]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --draft=false --prerelease=false

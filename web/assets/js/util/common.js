@@ -5,6 +5,12 @@ const ONE_TB = ONE_GB * 1024;
 const ONE_PB = ONE_TB * 1024;
 
 function sizeFormat(size) {
+    // 兼容 ECharts 传回的 null / undefined / NaN（例如样本里缺少该节点的点），
+    // 否则 size.toFixed 会抛异常并中断整次图表渲染
+    size = Number(size);
+    if (!isFinite(size)) {
+        size = 0;
+    }
     if (size < ONE_KB) {
         return size.toFixed(0) + " B";
     } else if (size < ONE_MB) {

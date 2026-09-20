@@ -10,6 +10,7 @@ import (
 	"strings"
 	"x-ui/config"
 	"x-ui/database/model"
+	uilogger "x-ui/logger"
 )
 
 var db *gorm.DB
@@ -45,12 +46,20 @@ func initSetting() error {
 func initTrafficSnapshot() error {
 	err := db.AutoMigrate(&model.TrafficSnapshot{})
 	if err != nil {
-		// 兼容运行过 0.5.x 的旧库：SQLite 索引名全库唯一，残留同名索引等
-		// "already exists" 错误不影响新表功能，不阻断启动
-		if strings.Contains(err.Error(), "already exists") {
-			return nil
+		// 兼容运行过旧版 fork 的库：SQLite 索引名全库唯一，残留的同名索引会让
+		// "建索引"阶段报 already exists。仅当表确实存在时才容忍（此时只是缺索引）；
+		// 表没建出来必须上抛，不能让大盘在"启动成功"的假象下永久没有数据。
+		if !strings.Contains(err.Error(), "already exists") || !db.Migrator().HasTable(&model.TrafficSnapshot{}) {
+			return err
 		}
-		return err
+		uilogger.Warning("traffic snapshot migrate skipped:", err)
+	}
+	// 兜底：确保概览与清理查询依赖的 created_at 索引存在
+	// （上面的容忍分支会中断 AutoMigrate 的建索引步骤）
+	if !db.Migrator().HasIndex(&model.TrafficSnapshot{}, "idx_traffic_snapshot_created_at") {
+		if e := db.Migrator().CreateIndex(&model.TrafficSnapshot{}, "idx_traffic_snapshot_created_at"); e != nil {
+			uilogger.Warning("create traffic snapshot created_at index failed:", e)
+		}
 	}
 	return nil
 }

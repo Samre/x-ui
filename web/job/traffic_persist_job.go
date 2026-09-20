@@ -2,6 +2,7 @@ package job
 
 import (
 	"time"
+	"x-ui/logger"
 	"x-ui/web/service"
 )
 
@@ -16,13 +17,13 @@ func NewTrafficPersistJob() *TrafficPersistJob {
 
 func (j *TrafficPersistJob) Run() {
 	panel := service.GetTrafficPanelService()
-	if err := panel.Flush(); err != nil {
-		return
-	}
+	// 落库失败不影响清理：失败原因（只读、磁盘满）不应连带让过期数据永不清理；
+	// Flush 内部已记录告警并把增量回填重试
+	_ = panel.Flush()
 	if time.Since(j.lastCleanup) >= time.Hour {
 		j.lastCleanup = time.Now()
 		if err := panel.Cleanup(); err != nil {
-			return
+			logger.Warning("cleanup traffic snapshot failed:", err)
 		}
 	}
 }

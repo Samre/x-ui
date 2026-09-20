@@ -218,6 +218,8 @@
             nodeTag: undefined,
             paused: false,
             refreshing: false,
+            // 概览请求序号：用于丢弃"切换范围之后才返回"的旧响应
+            overviewSeq: 0,
             samples: [],
             overview: null,
             realtimeOverview: null,
@@ -319,6 +321,22 @@
                 }
                 return tags.filter(t => t === this.nodeTag);
             },
+            realtimeTags(samples) {
+                // tag 直接取自样本：不再依赖概览请求是否成功，新增的入站也能立即出现
+                const tags = [];
+                const seen = {};
+                samples.forEach(s => {
+                    Object.keys(s.nodes || {}).forEach(tag => {
+                        if (!seen[tag]) {
+                            seen[tag] = true;
+                            tags.push(tag);
+                        }
+                    });
+                });
+                // 已拿到入站列表时按列表过滤，保证已删除的入站不显示
+                const known = this.nodeOptions.map(m => m.tag);
+                return known.length > 0 ? tags.filter(t => known.indexOf(t) >= 0) : tags;
+            },
             async loadRealtime() {
                 const msg = await HttpUtil.post(basePath + 'xui/traffic/realtime');
                 if (msg.success) {
@@ -327,23 +345,34 @@
                     this.renderRealtimeCharts();
                 }
             },
-            async loadOverview(rangeKey) {
-                this.refreshing = true;
+            async loadOverview(rangeKey, silent) {
+                if (!silent) {
+                    this.refreshing = true;
+                }
+                const seq = ++this.overviewSeq;
                 try {
                     const msg = await HttpUtil.post(basePath + 'xui/traffic/overview', { range: rangeKey });
-                    if (msg.success) {
-                        if (this.range === 'realtime') {
-                            this.realtimeOverview = msg.obj;
-                            // 节点列表就绪后立即重绘实时图，避免 F5 后"每节点速率"短暂空白
-                            this.renderRealtimeCharts();
-                        } else {
-                            this.overview = msg.obj;
-                            this.renderOverviewCharts();
-                        }
-                        this.lastUpdate = '更新于 ' + moment().format('HH:mm:ss');
+                    // 丢弃过期响应：期间已发起更新的请求，否则旧范围的数据会覆盖当前范围
+                    if (seq !== this.overviewSeq || !msg.success) {
+                        return;
                     }
+                    // 服务端返回的范围必须与本次请求一致
+                    if (msg.obj && msg.obj.range && msg.obj.range !== rangeKey) {
+                        return;
+                    }
+                    if (this.range === 'realtime') {
+                        this.realtimeOverview = msg.obj;
+                        // 节点列表就绪后立即重绘实时图，避免 F5 后"每节点速率"短暂空白
+                        this.renderRealtimeCharts();
+                    } else {
+                        this.overview = msg.obj;
+                        this.renderOverviewCharts();
+                    }
+                    this.lastUpdate = '更新于 ' + moment().format('HH:mm:ss');
                 } finally {
-                    this.refreshing = false;
+                    if (!silent) {
+                        this.refreshing = false;
+                    }
                 }
             },
             onRangeChange() {
@@ -404,8 +433,9 @@
                 }, true);
 
                 const times = samples.map(s => s.time);
-                // 只画现存的入站：已删除节点的 tag 即使还留在 30 分钟样本里也不再显示
-                const tags = this.nodeOptions.map(m => m.tag);
+                // 只画现存的入站：已删除节点的 tag 即使还留在 30 分钟样本里也不再显示；
+                // 概览未返回时退化为直接使用样本 tag，避免"每节点速率"一直空白
+                const tags = this.realtimeTags(samples);
                 this.renderNodeLines(times, 'HH:mm', tags,
                     tag => samples.map(s => (s.nodes[tag] ? s.nodes[tag].up : null)),
                     tag => samples.map(s => (s.nodes[tag] ? s.nodes[tag].down : null)),
@@ -503,7 +533,8 @@
                 const hourly = this.range === '24h';
                 const points = hourly ? o.total : o.daily;
                 const nodes = hourly ? o.nodes : o.dailyNodes;
-                const fmt = hourly ? 'HH:00' : 'MM-DD';
+                // 桶起点由服务端按配置时区对齐，标签直接用它，不能假定一定落在整点
+                const fmt = hourly ? 'HH:mm' : 'MM-DD';
                 const labels = this.timeLabels(points.map(p => p.time), fmt);
 
                 const nameMap = this.nameMap();
@@ -581,6 +612,11 @@
                 if (this.range === 'realtime' && !this.paused) {
                     try {
                         await this.loadRealtime();
+                        // 概览失败后持续补拉：节点列表与近 7 天数据都来自它，
+                        // 不补拉会让"每节点速率"一直空白（静默加载，不闪 loading）
+                        if (!this.realtimeOverview) {
+                            await this.loadOverview('7d', true);
+                        }
                     } catch (e) {
                         console.error(e);
                     }

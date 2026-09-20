@@ -16,6 +16,8 @@ func NewXrayTrafficJob() *XrayTrafficJob {
 
 func (j *XrayTrafficJob) Run() {
 	if !j.xrayService.IsXrayRunning() {
+		// Xray 进程不在：其流量计数器已随进程消失，通知面板不要跨这段空档折算速率
+		service.GetTrafficPanelService().MarkSampleGap()
 		return
 	}
 	traffics, err := j.xrayService.GetXrayTraffic()

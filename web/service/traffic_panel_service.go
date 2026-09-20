@@ -2,6 +2,7 @@ package service
 
 import (
 	"fmt"
+	"gorm.io/gorm"
 	"sort"
 	"sync"
 	"time"
@@ -11,8 +12,11 @@ import (
 	"x-ui/xray"
 )
 
-// 实时环形缓冲：样本间隔 10 秒，最多 180 个 ≈ 最近 30 分钟
+// 实时缓冲：标称采样间隔 10 秒，最多保留最近 30 分钟
 const realtimeSampleInterval = 10
+const realtimeMaxAge = 1800
+
+// 条数上限：防止采集被异常频繁调用时缓冲无限增长
 const realtimeMaxSamples = 180
 
 // 历史快照保留天数，需覆盖 15 天报表
@@ -105,6 +109,8 @@ type TrafficPanelService struct {
 	mutex    sync.Mutex
 	pending  map[string]*nodeDelta // 距上次落库的各入站增量
 	realtime []*RealtimeSample
+	// lastSampleAt 上次采集时刻（unix 秒），用于按真实间隔折算速率
+	lastSampleAt int64
 }
 
 var (
@@ -121,7 +127,9 @@ func GetTrafficPanelService() *TrafficPanelService {
 	return trafficPanel
 }
 
-// Record 由 XrayTrafficJob 每 10 秒调用，traffics 为自上次查询以来的增量
+// Record 由 XrayTrafficJob 每 10 秒调用，traffics 为自上次查询以来的增量。
+// 增量必须按真实经过时间折算：Xray 计数器每次查询后即被清零，若固定除以标称
+// 间隔，采集被延迟（gRPC 超时、写库阻塞、启动后首个样本）时速率会等比失真。
 func (s *TrafficPanelService) Record(traffics []*xray.Traffic) {
 	if len(traffics) == 0 {
 		return
@@ -133,13 +141,19 @@ func (s *TrafficPanelService) Record(traffics []*xray.Traffic) {
 	}
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	interval := now - s.lastSampleAt
+	if s.lastSampleAt == 0 || interval < 1 {
+		// 首个样本、时钟回拨或已知的采集空档：无法确定真实间隔，退回标称值
+		interval = realtimeSampleInterval
+	}
+	s.lastSampleAt = now
 	for _, t := range traffics {
 		if !t.IsInbound {
 			continue
 		}
 		speed := &NodeSpeed{
-			Up:   t.Up / realtimeSampleInterval,
-			Down: t.Down / realtimeSampleInterval,
+			Up:   t.Up / interval,
+			Down: t.Down / interval,
 		}
 		sample.Nodes[t.Tag] = speed
 		sample.Up += speed.Up
@@ -154,6 +168,27 @@ func (s *TrafficPanelService) Record(traffics []*xray.Traffic) {
 		delta.Down += t.Down
 	}
 	s.realtime = append(s.realtime, sample)
+	s.trimRealtimeLocked(now)
+}
+
+// MarkSampleGap 由 XrayTrafficJob 在 Xray 未运行时调用：计数器随进程重启归零，
+// 下一个样本的增量不再覆盖此前的时间段，不能再按跨越的时长折算。
+func (s *TrafficPanelService) MarkSampleGap() {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	s.lastSampleAt = 0
+}
+
+// trimRealtimeLocked 按时间窗口裁剪实时缓冲，并保留条数上限兜底
+func (s *TrafficPanelService) trimRealtimeLocked(now int64) {
+	cutoff := now - realtimeMaxAge
+	drop := 0
+	for drop < len(s.realtime)-1 && s.realtime[drop].Time < cutoff {
+		drop++
+	}
+	if drop > 0 {
+		s.realtime = s.realtime[drop:]
+	}
 	if len(s.realtime) > realtimeMaxSamples {
 		s.realtime = s.realtime[len(s.realtime)-realtimeMaxSamples:]
 	}
@@ -185,11 +220,32 @@ func (s *TrafficPanelService) Flush() error {
 	if len(snapshots) == 0 {
 		return nil
 	}
-	err := database.GetDB().CreateInBatches(snapshots, 100).Error
+	// 整批放进一个事务：要么全部写入成功，要么全部回填重试，避免"已清空 pending
+	// 却只落进去一部分"的半丢失状态
+	err := database.GetDB().Transaction(func(tx *gorm.DB) error {
+		return tx.CreateInBatches(snapshots, 100).Error
+	})
 	if err != nil {
-		logger.Warning("flush traffic snapshot failed:", err)
+		s.mergeBack(snapshots)
+		logger.Warning("flush traffic snapshot failed, merged back for retry:", err)
 	}
 	return err
+}
+
+// mergeBack 落库失败时把本批增量合并回 pending，交给下一轮 Flush 重试。
+// 与并发 Record 新写入的增量相加而非覆盖，避免丢掉失败窗口内的新数据。
+func (s *TrafficPanelService) mergeBack(snapshots []*model.TrafficSnapshot) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	for _, snap := range snapshots {
+		delta, ok := s.pending[snap.InboundTag]
+		if !ok {
+			delta = &nodeDelta{}
+			s.pending[snap.InboundTag] = delta
+		}
+		delta.Up += snap.Up
+		delta.Down += snap.Down
+	}
 }
 
 // Cleanup 删除超过保留期的历史快照
@@ -229,11 +285,13 @@ func (s *TrafficPanelService) getNodeMetas(inboundService *InboundService) []Nod
 }
 
 func bucketStart(t int64, granularity string, loc *time.Location) int64 {
+	tm := time.Unix(t, 0).In(loc)
 	if granularity == GranularityDay {
-		tm := time.Unix(t, 0).In(loc)
 		return time.Date(tm.Year(), tm.Month(), tm.Day(), 0, 0, 0, 0, loc).Unix()
 	}
-	return t - t%3600
+	// 取整到"本地"整点：直接对 unix 秒取模得到的是 UTC 整点，
+	// 在 +5:30 这类含小时以内偏移的时区会与本地小时错位
+	return time.Date(tm.Year(), tm.Month(), tm.Day(), tm.Hour(), 0, 0, 0, loc).Unix()
 }
 
 func nextBucketStart(t int64, granularity string, loc *time.Location) int64 {
@@ -315,6 +373,7 @@ func toNodeSeries(buckets []int64, accs map[int64]*bucketAcc, nameMap map[string
 func (s *TrafficPanelService) GetOverview(rangeKey string, inboundService *InboundService) (*OverviewResult, error) {
 	loc, err := s.settingService.GetTimeLocation()
 	if err != nil {
+		logger.Warning("get time location for traffic panel failed, fallback to server local time:", err)
 		loc = time.Local
 	}
 
@@ -333,12 +392,23 @@ func (s *TrafficPanelService) GetOverview(rangeKey string, inboundService *Inbou
 
 	now := time.Now().In(loc)
 	end := now.Unix()
+	// 按天序列的窗口：与自然日对齐，首桶才是完整的一天
+	dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	dailyStart := dayStart.AddDate(0, 0, -(days - 1)).Unix()
+
 	var start int64
-	if granularity == GranularityDay {
-		dayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-		start = dayStart.AddDate(0, 0, -(days - 1)).Unix()
-	} else {
-		start = end - int64(days)*86400
+	switch {
+	case granularity == GranularityDay:
+		// 15天：按自然日
+		start = dailyStart
+	case days == 1:
+		// 24小时：滚动最近 24 小时，以当前小时为最后一桶，
+		// 否则首桶不满整点却被当作整桶绘制
+		lastBucket := bucketStart(end, GranularityHour, loc)
+		start = lastBucket - int64(days*24-1)*3600
+	default:
+		// 7天：与自然日对齐，使小时序列与按天序列覆盖同一窗口、两边合计一致
+		start = dailyStart
 	}
 
 	db := database.GetDB()
@@ -365,6 +435,7 @@ func (s *TrafficPanelService) GetOverview(rangeKey string, inboundService *Inbou
 	if granularity == GranularityDay {
 		dailyBuckets, dailyAccs = mainBuckets, mainAccs
 	} else {
+		// 小时粒度时再按自然日聚合一份（7天窗口已对齐自然日，首日是完整的一天）
 		dailyBuckets, dailyAccs = bucketize(rows, start, end, GranularityDay, loc)
 	}
 

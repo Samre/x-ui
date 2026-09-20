@@ -9,155 +9,80 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    runs-on: ubuntu-latest
-    outputs:
-      upload_url: ${{ steps.create_release.outputs.upload_url }}
+  # 三个架构用矩阵构建，产物先作为 workflow artifact 上传
+  build:
+    name: build x-ui ${{ matrix.arch }} version
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            goarch: amd64
+            xray_zip: Xray-linux-64.zip
+            cross_cc: ''
+            cross_pkg: ''
+          - arch: arm64
+            goarch: arm64
+            xray_zip: Xray-linux-arm64-v8a.zip
+            cross_cc: aarch64-linux-gnu-gcc
+            cross_pkg: gcc-aarch64-linux-gnu
+          - arch: s390x
+            goarch: s390x
+            xray_zip: Xray-linux-s390x.zip
+            cross_cc: s390x-linux-gnu-gcc
+            cross_pkg: gcc-s390x-linux-gnu
     steps:
-      - name: Create Release
-        id: create_release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref }}
-          release_name: ${{ github.ref }}
-          draft: true
-          prerelease: true
-  linuxamd64build:
-    name: build x-ui amd64 version
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v7
       - name: Set up Go
-        uses: actions/setup-go@v2
+        uses: actions/setup-go@v7
         with:
-          go-version: 1.18
-      - name: build linux amd64 version
-        run: |
-          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -o xui-release -v main.go
-          mkdir x-ui
-          cp xui-release x-ui/xui-release
-          cp x-ui.service x-ui/x-ui.service
-          cp x-ui.sh x-ui/x-ui.sh
-          cd x-ui
-          mv xui-release x-ui
-          mkdir bin
-          cd bin
-          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-64.zip
-          unzip Xray-linux-64.zip
-          rm -f Xray-linux-64.zip geoip.dat geosite.dat
-          wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
-          wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
-          mv xray xray-linux-amd64
-          cd ..
-          cd ..
-      - name: package
-        run: tar -zcvf x-ui-linux-amd64.tar.gz x-ui
-      - name: upload
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: x-ui-linux-amd64.tar.gz
-          asset_name: x-ui-linux-amd64.tar.gz
-          asset_content_type: application/gzip
-  linuxarm64build:
-    name: build x-ui arm64 version
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.18
-      - name: build linux arm64 version
+          go-version: '1.27'
+      - name: Install cross compiler
+        if: matrix.cross_pkg != ''
         run: |
           sudo apt-get update
-          sudo apt install gcc-aarch64-linux-gnu
-          CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc go build -o xui-release -v main.go
-          mkdir x-ui
-          cp xui-release x-ui/xui-release
-          cp x-ui.service x-ui/x-ui.service
-          cp x-ui.sh x-ui/x-ui.sh
-          cd x-ui
-          mv xui-release x-ui
-          mkdir bin
-          cd bin
-          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-arm64-v8a.zip
-          unzip Xray-linux-arm64-v8a.zip
-          rm -f Xray-linux-arm64-v8a.zip geoip.dat geosite.dat
-          wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
-          wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
-          mv xray xray-linux-arm64
-          cd ..
-          cd ..
-      - name: package
-        run: tar -zcvf x-ui-linux-arm64.tar.gz x-ui
-      - name: upload
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: x-ui-linux-arm64.tar.gz
-          asset_name: x-ui-linux-arm64.tar.gz
-          asset_content_type: application/gzip
-  linuxs390xbuild:
-    name: build x-ui s390x version
-    needs: release
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v2
-      - name: Set up Go
-        uses: actions/setup-go@v2
-        with:
-          go-version: 1.18
-      - name: build linux s390x version
+          sudo apt-get install -y ${{ matrix.cross_pkg }}
+      - name: build linux ${{ matrix.arch }} version
         run: |
-          sudo apt-get update
-          sudo apt install gcc-s390x-linux-gnu -y
-          CGO_ENABLED=1 GOOS=linux GOARCH=s390x CC=s390x-linux-gnu-gcc go build -o xui-release -v main.go
-          mkdir x-ui
-          cp xui-release x-ui/xui-release
+          set -euo pipefail
+          export GOOS=linux GOARCH=${{ matrix.goarch }} CGO_ENABLED=1
+          if [ -n "${{ matrix.cross_cc }}" ]; then export CC="${{ matrix.cross_cc }}"; fi
+          go build -o xui-release -v main.go
+          mkdir -p x-ui/bin
+          mv xui-release x-ui/x-ui
           cp x-ui.service x-ui/x-ui.service
           cp x-ui.sh x-ui/x-ui.sh
-          cd x-ui
-          mv xui-release x-ui
-          mkdir bin
-          cd bin
-          wget https://github.com/XTLS/Xray-core/releases/latest/download/Xray-linux-s390x.zip
-          unzip Xray-linux-s390x.zip
-          rm -f Xray-linux-s390x.zip geoip.dat geosite.dat
+          cd x-ui/bin
+          wget https://github.com/XTLS/Xray-core/releases/latest/download/${{ matrix.xray_zip }}
+          unzip ${{ matrix.xray_zip }}
+          rm -f ${{ matrix.xray_zip }} geoip.dat geosite.dat
           wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat
           wget https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat
-          mv xray xray-linux-s390x
-          cd ..
-          cd ..
+          mv xray xray-linux-${{ matrix.arch }}
       - name: package
-        run: tar -zcvf x-ui-linux-s390x.tar.gz x-ui
-      - name: upload
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: tar -zcvf x-ui-linux-${{ matrix.arch }}.tar.gz x-ui
+      - name: upload artifact
+        uses: actions/upload-artifact@v7
         with:
-          upload_url: ${{ needs.release.outputs.upload_url }}
-          asset_path: x-ui-linux-s390x.tar.gz
-          asset_name: x-ui-linux-s390x.tar.gz
-          asset_content_type: application/gzip
-  # 三个架构的产物都上传完成后，才把 release 从 draft 正式发布出去：
-  # 这样 releases/latest（install.sh 用的接口）不会在任何时刻指向一个还没有附件的 release，
-  # 同时"推 tag 即完成正式发布"，不再需要手动点发布。
-  # 若本步骤失败，release 仍停在 draft（与改动前行为一致），手动发布即可。
+          name: x-ui-linux-${{ matrix.arch }}
+          path: x-ui-linux-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+
+  # 三个架构的产物都构建完成后，统一生成说明并发布：
+  # 先建 draft 并附上全部产物，最后才取消 draft，因此 releases/latest
+  # （install.sh 用的接口）不会在任何时刻指向一个还没有附件的 release。
   publish:
     name: publish release
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [release, linuxamd64build, linuxarm64build, linuxs390xbuild]
-    runs-on: ubuntu-latest
+    needs: build
+    runs-on: ubuntu-24.04
     steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
       # 用"上一版已发布的 release → 本次 tag"之间的提交标题自动生成更新日志
       # （本仓库直接提交 main、不走 PR，--generate-notes 只会给一个 compare 链接）
       - name: Generate release notes
@@ -192,7 +117,17 @@ jobs:
             fi
           } > "${notes}"
           cat "${notes}"
+      - name: Create draft release with assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file RELEASE_NOTES.md \
+            --draft \
+            dist/x-ui-linux-*.tar.gz
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --title "${GITHUB_REF_NAME}" --notes-file RELEASE_NOTES.md --draft=false --prerelease=false
+        run: gh release edit "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --draft=false

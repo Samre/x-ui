@@ -215,7 +215,10 @@ func TestTrimRealtimeWindowAndCap(t *testing.T) {
 // 用 -race 跑这条路径才有意义：Flush 会在释放 mutex 之后才访问数据库，
 // 期间 Record 仍在并发写入 pending。
 func TestMain(m *testing.M) {
-	if err := database.InitDB(filepath.Join(os.TempDir(), "x-ui-traffic-panel-test.db")); err != nil {
+	// 每次跑用新文件：Flush 的用例会断言"落库总量 + 待落库总量 == 写入总量"，
+	// 复用旧库会把上一次运行留下的行也算进去。
+	dbPath := filepath.Join(os.TempDir(), fmt.Sprintf("x-ui-traffic-panel-%d.db", time.Now().UnixNano()))
+	if err := database.InitDB(dbPath); err != nil {
 		fmt.Println("init test db failed:", err)
 		os.Exit(1)
 	}
@@ -280,9 +283,18 @@ func TestConcurrentRecordAndReads(t *testing.T) {
 
 // 并发 Flush：Flush 先持锁取走 pending，再在锁外写库并把结果合并回 pending。
 // 这条路径此前完全没有测试覆盖。
+//
+// 断言的是真正的不变量：已落库总量 + 待落库总量 == 写入总量。
+// 不能断言"pending 非空"——并发下最后一次 Flush 完全可能把增量写进库，
+// 此时 pending 合理地是空的，而数据并没有丢。
 func TestConcurrentFlushAndRecord(t *testing.T) {
+	const (
+		rounds = 200
+		upPer  = int64(100)
+		tag    = "node-0-concurrent-flush"
+	)
 	s := &TrafficPanelService{pending: map[string]*nodeDelta{}}
-	traffics := []*xray.Traffic{{IsInbound: true, Tag: "node-0", Up: 100, Down: 200}}
+	traffics := []*xray.Traffic{{IsInbound: true, Tag: tag, Up: upPer, Down: 200}}
 
 	var wg sync.WaitGroup
 	for i := 0; i < 4; i++ {
@@ -294,17 +306,31 @@ func TestConcurrentFlushAndRecord(t *testing.T) {
 			}
 		}()
 	}
-	for i := 0; i < 200; i++ {
+	for i := 0; i < rounds; i++ {
 		s.Record(traffics)
 	}
 	wg.Wait()
 
-	// 全部增量最终必须落在待落库缓冲里（写库成功或失败回填，二者必居其一）
+	// 显式命名聚合列：直接 Scan 到 int64 依赖 gorm 猜测列名，不可靠
+	var sum struct{ Total int64 }
+	if err := database.GetDB().Model(&model.TrafficSnapshot{}).
+		Where("inbound_tag = ?", tag).
+		Select("COALESCE(SUM(up), 0) AS total").
+		Scan(&sum).Error; err != nil {
+		t.Fatalf("读取已落库总量失败: %v", err)
+	}
+	stored := sum.Total
 	s.mutex.Lock()
-	delta := s.pending["node-0"]
+	delta := s.pending[tag]
 	s.mutex.Unlock()
-	if delta == nil || delta.Up <= 0 {
-		t.Fatalf("并发 Flush 后增量被丢弃: %+v", delta)
+	var pendingUp int64
+	if delta != nil {
+		pendingUp = delta.Up
+	}
+
+	if want := int64(rounds) * upPer; stored+pendingUp != want {
+		t.Fatalf("并发 Flush 丢数据: 已落库=%d 待落库=%d 合计=%d, 期望=%d（丢失 %d）",
+			stored, pendingUp, stored+pendingUp, want, want-(stored+pendingUp))
 	}
 }
 

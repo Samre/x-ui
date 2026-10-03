@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  # 所有分支：推到特性分支也要跑，否则"先推分支看 CI"这条路走不通
+  push:
+  pull_request:
+  # 允许手动触发（workflow_dispatch 需要 workflow 已存在于默认分支）
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  vet-and-test:
+    name: go vet + go test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+      - name: go vet
+        run: go vet ./...
+      # 这两个包的测试是纯计算的，不打开数据库，也不需要 C 编译器
+      - name: go test
+        run: go test ./database/model/... ./web/service/...
+
+  race:
+    name: go test -race
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: '1.27'
+      # -race 需要 cgo，而本项目依赖的 sqlite 驱动在导入链上；
+      # ubuntu 运行器自带 gcc，因此这里显式打开 CGO。
+      - name: go test -race
+        env:
+          CGO_ENABLED: '1'
+        run: go test -race ./database/model/... ./web/service/...

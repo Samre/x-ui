@@ -35,7 +35,6 @@ type AllSetting struct {
 	XrayTemplateConfig string `json:"xrayTemplateConfig" form:"xrayTemplateConfig"`
 	PushPlusEnable     bool   `json:"pushPlusEnable" form:"pushPlusEnable"`
 	PushPlusToken      string `json:"pushPlusToken" form:"pushPlusToken"`
-	PushPlusRunTime    string `json:"pushPlusRunTime" form:"pushPlusRunTime"`
 
 	TimeLocation string `json:"timeLocation" form:"timeLocation"`
 }

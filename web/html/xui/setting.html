@@ -73,9 +73,8 @@
                         </a-tab-pane>
                         <a-tab-pane key="4" tab="PushPlus提醒相关设置">
                             <a-list item-layout="horizontal" style="background: white">
-                                <setting-list-item type="switch" title="启用PushPlus推送" desc="微信推送通知,重启面板生效"  v-model="allSetting.pushPlusEnable"></setting-list-item>
+                                <setting-list-item type="switch" title="启用PushPlus推送" desc="微信推送通知；事件驱动：登录、节点流量超限或到期时即时推送，无需设置时间，开启后立即生效"  v-model="allSetting.pushPlusEnable"></setting-list-item>
                                 <setting-list-item type="text" title="PushPlus TOKEN" desc="pushplus.plus 官网获取,重启面板生效"  v-model="allSetting.pushPlusToken"></setting-list-item>
-                                <setting-list-item type="text" title="PushPlus通知时间" desc="每日流量统计的推送时间,采用Crontab定时格式,重启面板生效"  v-model="allSetting.pushPlusRunTime"></setting-list-item>
                             </a-list>
                         </a-tab-pane>
                         <a-tab-pane key="5" tab="其他设置">

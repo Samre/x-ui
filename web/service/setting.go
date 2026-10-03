@@ -32,7 +32,6 @@ var defaultValueMap = map[string]string{
 	"timeLocation":       "Asia/Shanghai",
 	"pushPlusEnable":     "false",
 	"pushPlusToken":      "",
-	"pushPlusRunTime":    "",
 }
 
 type SettingService struct {
@@ -210,13 +209,6 @@ func (s *SettingService) GetPushPlusToken() (string, error) {
 	return s.getString("pushPlusToken")
 }
 
-func (s *SettingService) SetPushPlusRuntime(time string) error {
-	return s.setString("pushPlusRunTime", time)
-}
-
-func (s *SettingService) GetPushPlusRuntime() (string, error) {
-	return s.getString("pushPlusRunTime")
-}
 
 func (s *SettingService) GetPort() (int, error) {
 	return s.getInt("webPort")

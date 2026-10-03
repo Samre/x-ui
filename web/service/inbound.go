@@ -166,6 +166,23 @@ func (s *InboundService) AddTraffic(traffics []*xray.Traffic) (err error) {
 	return
 }
 
+// FindInvalidInbounds 返回当前启用、且已满足停用条件（流量超限或已到期）的入站。
+// 条件必须与 DisableInvalidInbounds 完全一致，否则告警内容会和实际停用结果对不上。
+func (s *InboundService) FindInvalidInbounds() ([]*model.Inbound, error) {
+	db := database.GetDB()
+	now := time.Now().Unix() * 1000
+	inbounds := make([]*model.Inbound, 0)
+	err := db.Model(model.Inbound{}).
+		Select("tag, remark, port, up, down, total, expiry_time").
+		Where("((total > 0 and up + down >= total) or (expiry_time > 0 and expiry_time <= ?)) and enable = ?", now, true).
+		Order("id").
+		Find(&inbounds).Error
+	if err != nil {
+		return nil, err
+	}
+	return inbounds, nil
+}
+
 func (s *InboundService) DisableInvalidInbounds() (int64, error) {
 	db := database.GetDB()
 	now := time.Now().Unix() * 1000

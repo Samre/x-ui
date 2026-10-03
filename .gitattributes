@@ -1,0 +1,35 @@
+# 统一换行符为 LF。
+#
+# 背景：仓库原先没有 .gitattributes 且工作区是 CRLF，而 gofmt 一律归一化为 LF，
+# 于是 `gofmt -l .` 会把每个 .go 文件都报成"未格式化"——工具链与仓库打架，
+# 任何基于 gofmt 的 CI 门槛都会立刻失败。这里把仓库内的换行符钉死为 LF，
+# 使 gofmt 的结果与提交内容一致。
+#
+# 注意：首次生效时 git 会重写这些文件的换行符，会产生一次"全仓改动"的提交。
+# 这是预期的、一次性的。
+
+# 默认：按内容自动识别文本文件，仓库内统一存 LF
+* text=auto
+
+# 源码与脚本：仓库内必须是 LF，检出时不转换，保证 gofmt / shellcheck 稳定
+*.go   text eol=lf
+*.sh   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.json text eol=lf
+*.html text eol=lf
+*.js   text eol=lf
+*.css  text eol=lf
+
+# 标记为二进制：禁止 git 做换行转换、文本 diff 与合并
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.dat  binary
+*.gz   binary
+*.zip  binary
+*.db   binary
+xray-linux-* binary

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/nicksnyder/go-i18n/v2/i18n"
 	"net"
 	"net/http"
 	"strings"
@@ -77,6 +78,21 @@ func html(c *gin.Context, name string, title string, data gin.H) {
 	data["title"] = title
 	data["request_uri"] = c.Request.RequestURI
 	data["base_path"] = c.GetString("base_path")
+	// 把本次请求的 localizer 绑进模板数据：模板用 {{ .localize "key" }} 本地化。
+	// 模板函数拿不到请求上下文，而共享变量会让并发请求互相串台。
+	if localizer, ok := c.Get("localizer"); ok {
+		if l, ok := localizer.(*i18n.Localizer); ok && l != nil {
+			// 找不到消息时回退成 key 本身：与其让页面渲染失败，
+			// 不如显示 key 便于定位缺失的翻译项。
+			data["localize"] = func(key string) string {
+				msg, err := l.Localize(&i18n.LocalizeConfig{MessageID: key})
+				if err != nil {
+					return key
+				}
+				return msg
+			}
+		}
+	}
 	c.HTML(http.StatusOK, name, getContext(data))
 }
 

@@ -64,6 +64,22 @@ type Status struct {
 	} `json:"netTraffic"`
 }
 
+// Clone 返回一个不共享可变状态的副本。
+// refreshStatus 每次发布新副本、消费者只读旧副本，
+// 否则 HTTP 处理器序列化 lastStatus 时会与 cron 的改写并发。
+// 目前唯一需要独立复制的字段是 Loads 切片，其余都是值类型。
+func (s *Status) Clone() *Status {
+	if s == nil {
+		return nil
+	}
+	clone := *s
+	if s.Loads != nil {
+		clone.Loads = make([]float64, len(s.Loads))
+		copy(clone.Loads, s.Loads)
+	}
+	return &clone
+}
+
 type Release struct {
 	TagName string `json:"tag_name"`
 }

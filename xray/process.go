@@ -13,7 +13,9 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
+
 	"x-ui/util/common"
 
 	"github.com/Workiva/go-datastructures/queue"
@@ -58,6 +60,11 @@ func NewProcess(xrayConfig *Config) *Process {
 }
 
 type process struct {
+	// mutex 保护下面所有可变字段。它们分别被 gRPC 读取方（GetTraffic/GetVersion）、
+	// cmd.Run() 的等待 goroutine（写 exitErr）和 Stop()（读 cmd.Process）访问，
+	// 而调用方分处 cron 任务与 HTTP 处理器两个 goroutine。
+	mutex sync.RWMutex
+
 	cmd *exec.Cmd
 
 	version string
@@ -77,6 +84,8 @@ func newProcess(config *Config) *process {
 }
 
 func (p *process) IsRunning() bool {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	if p.cmd == nil || p.cmd.Process == nil {
 		return false
 	}
@@ -87,12 +96,17 @@ func (p *process) IsRunning() bool {
 }
 
 func (p *process) GetErr() error {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	return p.exitErr
 }
 
 func (p *process) GetResult() string {
-	if p.lines.Empty() && p.exitErr != nil {
-		return p.exitErr.Error()
+	p.mutex.RLock()
+	exitErr := p.exitErr
+	p.mutex.RUnlock()
+	if p.lines.Empty() && exitErr != nil {
+		return exitErr.Error()
 	}
 	items, _ := p.lines.TakeUntil(func(item interface{}) bool {
 		return true
@@ -105,49 +119,65 @@ func (p *process) GetResult() string {
 }
 
 func (p *process) GetVersion() string {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	return p.version
 }
 
 func (p *Process) GetAPIPort() int {
+	p.mutex.RLock()
+	defer p.mutex.RUnlock()
 	return p.apiPort
 }
 
 func (p *Process) GetConfig() *Config {
+	// config 在 newProcess 之后不再改写，无需加锁
 	return p.config
 }
 
 func (p *process) refreshAPIPort() {
+	port := 0
 	for _, inbound := range p.config.InboundConfigs {
 		if inbound.Tag == "api" {
-			p.apiPort = inbound.Port
+			port = inbound.Port
 			break
 		}
 	}
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.apiPort = port
 }
 
 func (p *process) refreshVersion() {
 	cmd := exec.Command(GetBinaryPath(), "-version")
 	data, err := cmd.Output()
-	if err != nil {
-		p.version = "Unknown"
-	} else {
+	version := "Unknown"
+	if err == nil {
 		datas := bytes.Split(data, []byte(" "))
-		if len(datas) <= 1 {
-			p.version = "Unknown"
-		} else {
-			p.version = string(datas[1])
+		if len(datas) > 1 {
+			version = string(datas[1])
 		}
 	}
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	p.version = version
 }
 
 func (p *process) Start() (err error) {
-	if p.IsRunning() {
+	// 这里不能用 p.IsRunning()：Go 的 sync.RWMutex 不可重入，
+	// 而下面写 p.cmd 时会持有写锁，再取读锁会自锁死。
+	p.mutex.RLock()
+	alreadyRunning := p.cmd != nil && p.cmd.Process != nil && p.cmd.ProcessState == nil
+	p.mutex.RUnlock()
+	if alreadyRunning {
 		return errors.New("xray is already running")
 	}
 
 	defer func() {
 		if err != nil {
+			p.mutex.Lock()
 			p.exitErr = err
+			p.mutex.Unlock()
 		}
 	}()
 
@@ -162,7 +192,9 @@ func (p *process) Start() (err error) {
 	}
 
 	cmd := exec.Command(GetBinaryPath(), "-c", configPath)
+	p.mutex.Lock()
 	p.cmd = cmd
+	p.mutex.Unlock()
 
 	stdReader, err := cmd.StdoutPipe()
 	if err != nil {
@@ -212,7 +244,9 @@ func (p *process) Start() (err error) {
 	go func() {
 		err := cmd.Run()
 		if err != nil {
+			p.mutex.Lock()
 			p.exitErr = err
+			p.mutex.Unlock()
 		}
 	}()
 
@@ -223,17 +257,22 @@ func (p *process) Start() (err error) {
 }
 
 func (p *process) Stop() error {
-	if !p.IsRunning() {
+	p.mutex.Lock()
+	defer p.mutex.Unlock()
+	if p.cmd == nil || p.cmd.Process == nil || p.cmd.ProcessState != nil {
 		return errors.New("xray is not running")
 	}
 	return p.cmd.Process.Kill()
 }
 
 func (p *process) GetTraffic(reset bool) ([]*Traffic, error) {
-	if p.apiPort == 0 {
-		return nil, common.NewError("xray api port wrong:", p.apiPort)
+	p.mutex.RLock()
+	apiPort := p.apiPort
+	p.mutex.RUnlock()
+	if apiPort == 0 {
+		return nil, common.NewError("xray api port wrong:", apiPort)
 	}
-	conn, err := grpc.Dial(fmt.Sprintf("127.0.0.1:%v", p.apiPort), grpc.WithInsecure())
+	conn, err := grpc.Dial(fmt.Sprintf("127.0.0.1:%v", apiPort), grpc.WithInsecure())
 	if err != nil {
 		return nil, err
 	}
@@ -249,23 +288,35 @@ func (p *process) GetTraffic(reset bool) ([]*Traffic, error) {
 	if err != nil {
 		return nil, err
 	}
-	tagTrafficMap := map[string]*Traffic{}
+	// 键必须含方向：同一个 tag 的 inbound 与 outbound 是两条独立的统计项，
+	// 只按 tag 归并会让后者的值覆盖前者，并把 IsInbound 标成最后一条的方向。
+	type trafficKey struct {
+		isInbound bool
+		tag       string
+	}
+	tagTrafficMap := map[trafficKey]*Traffic{}
 	traffics := make([]*Traffic, 0)
 	for _, stat := range resp.GetStat() {
 		matchs := trafficRegex.FindStringSubmatch(stat.Name)
+		// 统计项由外部 Xray 进程提供，命名不保证符合本正则；
+		// 不判空就直接取下标会以索引越界 panic 掉整个面板进程。
+		if len(matchs) < 4 {
+			continue
+		}
 		isInbound := matchs[1] == "inbound"
 		tag := matchs[2]
 		isDown := matchs[3] == "downlink"
 		if tag == "api" {
 			continue
 		}
-		traffic, ok := tagTrafficMap[tag]
+		key := trafficKey{isInbound: isInbound, tag: tag}
+		traffic, ok := tagTrafficMap[key]
 		if !ok {
 			traffic = &Traffic{
 				IsInbound: isInbound,
 				Tag:       tag,
 			}
-			tagTrafficMap[tag] = traffic
+			tagTrafficMap[key] = traffic
 			traffics = append(traffics, traffic)
 		}
 		if isDown {

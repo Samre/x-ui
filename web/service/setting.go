@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
 	"x-ui/database"
 	"x-ui/database/model"
 	"x-ui/logger"
@@ -26,7 +27,7 @@ var defaultValueMap = map[string]string{
 	"webPort":            "54321",
 	"webCertFile":        "",
 	"webKeyFile":         "",
-	"secret":             random.Seq(32),
+	"secret":             random.CryptoSeq(32),
 	"webBasePath":        "/",
 	"timeLocation":       "Asia/Shanghai",
 	"pushPlusEnable":     "false",

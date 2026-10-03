@@ -4,9 +4,14 @@ package service
 // 分桶对齐与"小时/按天合计一致"。只依赖纯计算逻辑，不访问数据库。
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
+	"x-ui/database"
 	"x-ui/database/model"
 	"x-ui/xray"
 )
@@ -203,5 +208,178 @@ func TestTrimRealtimeWindowAndCap(t *testing.T) {
 	s.trimRealtimeLocked(now)
 	if len(s.realtime) != realtimeMaxSamples {
 		t.Fatalf("条数上限错误: got=%d want=%d", len(s.realtime), realtimeMaxSamples)
+	}
+}
+
+// TestMain 让本文件的并发用例能走到 Flush 的落库分支。
+// 用 -race 跑这条路径才有意义：Flush 会在释放 mutex 之后才访问数据库，
+// 期间 Record 仍在并发写入 pending。
+func TestMain(m *testing.M) {
+	// 每次跑用新文件：Flush 的用例会断言"落库总量 + 待落库总量 == 写入总量"，
+	// 复用旧库会把上一次运行留下的行也算进去。
+	dbPath := filepath.Join(os.TempDir(), fmt.Sprintf("x-ui-traffic-panel-%d.db", time.Now().UnixNano()))
+	if err := database.InitDB(dbPath); err != nil {
+		fmt.Println("init test db failed:", err)
+		os.Exit(1)
+	}
+	os.Exit(m.Run())
+}
+
+// 并发重复 10 秒采集与读取：Record / GetRealtime 必须无数据竞争。
+// 用 -race 跑时这是真正会读到 s.realtime 与 s.pending 的路径。
+func TestConcurrentRecordAndReads(t *testing.T) {
+	s := &TrafficPanelService{pending: map[string]*nodeDelta{}}
+	const (
+		rounds   = 200
+		readers  = 4
+		tagCount = 3
+	)
+	traffics := make([]*xray.Traffic, 0, tagCount)
+	for i := 0; i < tagCount; i++ {
+		traffics = append(traffics, &xray.Traffic{
+			IsInbound: true,
+			Tag:       fmt.Sprintf("node-%d", i),
+			Up:        1024,
+			Down:      2048,
+		})
+	}
+
+	var wg sync.WaitGroup
+	stop := make(chan struct{})
+
+	for i := 0; i < readers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					s.GetRealtime()
+				}
+			}
+		}()
+	}
+
+	for i := 0; i < rounds; i++ {
+		s.Record(traffics)
+	}
+
+	close(stop)
+	wg.Wait()
+
+	// 累计增量必须与写入次数严格相等（pending 在解锁后才可能被 Flush 清空）
+	s.mutex.Lock()
+	var up int64
+	for _, delta := range s.pending {
+		up += delta.Up
+	}
+	s.mutex.Unlock()
+	if want := int64(rounds) * tagCount * 1024; up != want {
+		t.Fatalf("pending 增量被丢失: got=%d want=%d", up, want)
+	}
+}
+
+// 并发 Flush：Flush 先持锁取走 pending，再在锁外写库并把结果合并回 pending。
+// 这条路径此前完全没有测试覆盖。
+//
+// 断言的是真正的不变量：已落库总量 + 待落库总量 == 写入总量。
+// 不能断言"pending 非空"——并发下最后一次 Flush 完全可能把增量写进库，
+// 此时 pending 合理地是空的，而数据并没有丢。
+func TestConcurrentFlushAndRecord(t *testing.T) {
+	const (
+		rounds = 200
+		upPer  = int64(100)
+		tag    = "node-0-concurrent-flush"
+	)
+	s := &TrafficPanelService{pending: map[string]*nodeDelta{}}
+	traffics := []*xray.Traffic{{IsInbound: true, Tag: tag, Up: upPer, Down: 200}}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = s.Flush()
+			}
+		}()
+	}
+	for i := 0; i < rounds; i++ {
+		s.Record(traffics)
+	}
+	wg.Wait()
+
+	// 显式命名聚合列：直接 Scan 到 int64 依赖 gorm 猜测列名，不可靠
+	var sum struct{ Total int64 }
+	if err := database.GetDB().Model(&model.TrafficSnapshot{}).
+		Where("inbound_tag = ?", tag).
+		Select("COALESCE(SUM(up), 0) AS total").
+		Scan(&sum).Error; err != nil {
+		t.Fatalf("读取已落库总量失败: %v", err)
+	}
+	stored := sum.Total
+	s.mutex.Lock()
+	delta := s.pending[tag]
+	s.mutex.Unlock()
+	var pendingUp int64
+	if delta != nil {
+		pendingUp = delta.Up
+	}
+
+	if want := int64(rounds) * upPer; stored+pendingUp != want {
+		t.Fatalf("并发 Flush 丢数据: 已落库=%d 待落库=%d 合计=%d, 期望=%d（丢失 %d）",
+			stored, pendingUp, stored+pendingUp, want, want-(stored+pendingUp))
+	}
+}
+
+// 概览缓存的并发读写：命中路径会复制并列出的切片，不能与后续请求并发改写
+func TestConcurrentOverviewCache(t *testing.T) {
+	s := &TrafficPanelService{pending: map[string]*nodeDelta{}}
+	const rangeKey = Range24h
+	base := time.Now()
+	s.storeOverviewCache(rangeKey, base, &OverviewResult{
+		Range:    rangeKey,
+		End:      base.Unix(),
+		Total:    []SeriesPoint{{Time: base.Unix(), Up: 1, Down: 2}},
+		NodeList: []NodeMeta{{Tag: "node-0", Name: "node-0"}},
+	})
+
+	// 不能在 goroutine 里调 t.Errorf：测试函数返回后再调用会 panic，
+	// 这里把失败信息收集起来由主 goroutine 判定。
+	failures := make(chan string, 8)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 100; j++ {
+				result, ok := s.cachedOverview(rangeKey, base.Add(time.Duration(j)*time.Millisecond))
+				if !ok {
+					failures <- "缓存未命中"
+					return
+				}
+				// 读 End 之外的字段（共享切片），确认副本可用
+				if len(result.Total) != 1 || result.Total[0].Up != 1 {
+					failures <- "缓存副本内容错误"
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(failures)
+	for msg := range failures {
+		t.Fatalf("%s", msg)
+	}
+
+	// 过期后必须失效
+	if _, ok := s.cachedOverview(rangeKey, base.Add(overviewCacheTTL+time.Second)); ok {
+		t.Fatalf("缓存超过 TTL 仍然命中")
+	}
+	// 不同 range 不能互相命中
+	if _, ok := s.cachedOverview(Range7d, base); ok {
+		t.Fatalf("不同 range 命中了同一份缓存")
 	}
 }

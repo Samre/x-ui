@@ -97,6 +97,17 @@ type nodeDelta struct {
 	Down int64
 }
 
+// 概览结果缓存：GetOverview 是同步的 HTTP 处理器，每次都要全窗口扫表
+// 并在 Go 侧分桶。同一分钟内的数据不会变化（落库任务每分钟一次），
+// 因此允许秒级陈旧以换取并发浏览时不再重复全量扫描。
+const overviewCacheTTL = 15 * time.Second
+
+type overviewCacheEntry struct {
+	key       string
+	expiresAt time.Time
+	result    *OverviewResult
+}
+
 type bucketAcc struct {
 	Up    int64
 	Down  int64
@@ -111,6 +122,9 @@ type TrafficPanelService struct {
 	realtime []*RealtimeSample
 	// lastSampleAt 上次采集时刻（unix 秒），用于按真实间隔折算速率
 	lastSampleAt int64
+
+	cacheMutex  sync.Mutex
+	overviewCac overviewCacheEntry
 }
 
 var (
@@ -125,6 +139,32 @@ func GetTrafficPanelService() *TrafficPanelService {
 		}
 	})
 	return trafficPanel
+}
+
+// cachedOverview 命中时返回结果副本。必须复制而不能直接交出缓存里的指针：
+// 后续请求会改写 End，与正在 JSON 序列化的调用方构成数据竞争。
+// OverviewResult 内全部是值类型或只由本服务填充的切片，浅拷贝即可。
+func (s *TrafficPanelService) cachedOverview(rangeKey string, now time.Time) (*OverviewResult, bool) {
+	s.cacheMutex.Lock()
+	defer s.cacheMutex.Unlock()
+	entry := s.overviewCac
+	if entry.result == nil || entry.key != rangeKey || now.After(entry.expiresAt) {
+		return nil, false
+	}
+	cached := *entry.result
+	// End 不能跟着变陈旧：前端用窗口末端画时间轴
+	cached.End = now.Unix()
+	return &cached, true
+}
+
+func (s *TrafficPanelService) storeOverviewCache(rangeKey string, now time.Time, result *OverviewResult) {
+	s.cacheMutex.Lock()
+	defer s.cacheMutex.Unlock()
+	s.overviewCac = overviewCacheEntry{
+		key:       rangeKey,
+		expiresAt: now.Add(overviewCacheTTL),
+		result:    result,
+	}
 }
 
 // Record 由 XrayTrafficJob 每 10 秒调用，traffics 为自上次查询以来的增量。
@@ -371,6 +411,12 @@ func toNodeSeries(buckets []int64, accs map[int64]*bucketAcc, nameMap map[string
 }
 
 func (s *TrafficPanelService) GetOverview(rangeKey string, inboundService *InboundService) (*OverviewResult, error) {
+	// 缓存命中直接返回，跳过后面的全窗口扫表与分桶
+	cacheNow := time.Now()
+	if result, ok := s.cachedOverview(rangeKey, cacheNow); ok {
+		return result, nil
+	}
+
 	loc, err := s.settingService.GetTimeLocation()
 	if err != nil {
 		logger.Warning("get time location for traffic panel failed, fallback to server local time:", err)
@@ -510,5 +556,6 @@ func (s *TrafficPanelService) GetOverview(rangeKey string, inboundService *Inbou
 			result.PeakDown = p.Down / bucketSeconds
 		}
 	}
+	s.storeOverviewCache(rangeKey, cacheNow, result)
 	return result, nil
 }

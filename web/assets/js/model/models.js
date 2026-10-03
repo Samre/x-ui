@@ -166,7 +166,6 @@ class AllSetting {
         this.xrayTemplateConfig = "";
         this.pushPlusEnable = false;
         this.pushPlusToken = "";
-        this.pushPlusRunTime = "";
 
         this.timeLocation = "Asia/Shanghai";
 

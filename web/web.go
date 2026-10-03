@@ -270,24 +270,12 @@ func (s *Server) startTask() {
 	}()
 
 	// 每 30 秒检查一次 inbound 流量超出和到期的情况
+	// （命中时由 CheckInboundJob 立即推送 PushPlus 告警）
 	s.cron.AddJob("@every 30s", job.NewCheckInboundJob())
-	// 每一天提示一次流量情况,上海时间8点30
-	var entry cron.EntryID
-	isPushPlusEnabled, err := s.settingService.GetPushPlusEnable()
-	if err == nil && isPushPlusEnabled {
-		runtime, err := s.settingService.GetPushPlusRuntime()
-		if err != nil || runtime == "" {
-			logger.Errorf("Add NewStatsNotifyJob error[%s],Runtime[%s] invalid,wil run default", err, runtime)
-			runtime = "@daily"
-		}
-		logger.Infof("PushPlus notify enabled,run at %s", runtime)
-		entry, err = s.cron.AddJob(runtime, job.NewStatsNotifyJob())
-		if err != nil {
-			logger.Warning("Add NewStatsNotifyJob error", err)
-			return
-		}
-	} else {
-		s.cron.Remove(entry)
+	// PushPlus 通知已改为事件驱动：登录、入站超限/到期时即时推送，
+	// 不再按 crontab 定时推送流量汇总，因此设置里没有"通知时间"这一项。
+	if enable, err := s.settingService.GetPushPlusEnable(); err == nil && enable {
+		logger.Info("PushPlus notify enabled (event-driven)")
 	}
 }
 

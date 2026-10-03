@@ -60,7 +60,7 @@ func (a *IndexController) login(c *gin.Context) {
 	user := a.userService.CheckUser(form.Username, form.Password)
 	timeStr := time.Now().Format("2006-01-02 15:04:05")
 	if user == nil {
-		job.NewStatsNotifyJob().UserLoginNotify(form.Username, getRemoteIp(c), timeStr, 0)
+		job.NewPushPlusNotifyJob().LoginNotify(form.Username, getRemoteIp(c), timeStr, job.LoginFail)
 		// 只记用户名：口令明文一旦进日志，最常见的情形（用户打错一位）
 		// 恰恰会把真实口令写进日志文件。
 		logger.Infof("wrong username or password: \"%s\"", form.Username)
@@ -68,7 +68,7 @@ func (a *IndexController) login(c *gin.Context) {
 		return
 	} else {
 		logger.Infof("%s login success,Ip Address:%s\n", form.Username, getRemoteIp(c))
-		job.NewStatsNotifyJob().UserLoginNotify(form.Username, getRemoteIp(c), timeStr, 1)
+		job.NewPushPlusNotifyJob().LoginNotify(form.Username, getRemoteIp(c), timeStr, job.LoginSuccess)
 	}
 
 	err = session.SetLoginUser(c, user)

@@ -61,7 +61,9 @@ func (a *IndexController) login(c *gin.Context) {
 	timeStr := time.Now().Format("2006-01-02 15:04:05")
 	if user == nil {
 		job.NewStatsNotifyJob().UserLoginNotify(form.Username, getRemoteIp(c), timeStr, 0)
-		logger.Infof("wrong username or password: \"%s\" \"%s\"", form.Username, form.Password)
+		// 只记用户名：口令明文一旦进日志，最常见的情形（用户打错一位）
+		// 恰恰会把真实口令写进日志文件。
+		logger.Infof("wrong username or password: \"%s\"", form.Username)
 		pureJsonMsg(c, false, "用户名或密码错误")
 		return
 	} else {

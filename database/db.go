@@ -1,13 +1,16 @@
 package database
 
 import (
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	"errors"
 	"io/fs"
 	"os"
 	"path"
 	"strings"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
+
 	"x-ui/config"
 	"x-ui/database/model"
 	uilogger "x-ui/logger"
@@ -111,6 +114,10 @@ func GetDB() *gorm.DB {
 	return db
 }
 
+// IsNotFound 判断记录是否不存在。用 errors.Is 而不是 == 比较：
+// gorm 可能把 ErrRecordNotFound 包装后再返回，值比较会漏判，
+// 而调用方（getString 的默认值兜底、saveSetting 的建记录分支、
+// UpdateFirstUser 的首次建号分支）都把它当作控制流条件。
 func IsNotFound(err error) bool {
-	return err == gorm.ErrRecordNotFound
+	return errors.Is(err, gorm.ErrRecordNotFound)
 }

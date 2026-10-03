@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"x-ui/logger"
 )
 
 func getLinesNum(filename string) (int, error) {
@@ -18,16 +20,24 @@ func getLinesNum(filename string) (int, error) {
 
 	sum := 0
 	buf := make([]byte, 8192)
+	// buffPosition 必须跨读循环保留：每次 Read 只覆盖 buf 的前 n 个字节，
+	// 若每轮从 0 重扫，上一块里的换行会被反复计数。
+	buffPosition := 0
 	for {
 		n, err := file.Read(buf)
 
-		var buffPosition int
+		// 只在本次读到的 [start, n) 里找换行，不把上一块的残留字节再数一遍
+		start := buffPosition
+		if start > n {
+			start = n
+		}
 		for {
-			i := bytes.IndexByte(buf[buffPosition:], '\n')
-			if i < 0 || n == buffPosition {
+			i := bytes.IndexByte(buf[start:n], '\n')
+			if i < 0 {
 				break
 			}
-			buffPosition += i + 1
+			start += i + 1
+			buffPosition = start
 			sum++
 		}
 
@@ -48,7 +58,10 @@ func GetTCPCount() (int, error) {
 	}
 	tcp6, err := getLinesNum(fmt.Sprintf("%v/net/tcp6", root))
 	if err != nil {
-		return tcp4 + tcp6, nil
+		// 原来返回 (tcp4+tcp6, nil)：报成功却把 tcp6 当 0，调用方拿到
+		// 一个偏小且无声的计数，err 变量也只是被赋值后丢弃。
+		logger.Warning("read tcp6 connections failed:", err)
+		return tcp4, nil
 	}
 
 	return tcp4 + tcp6, nil
@@ -63,7 +76,8 @@ func GetUDPCount() (int, error) {
 	}
 	udp6, err := getLinesNum(fmt.Sprintf("%v/net/udp6", root))
 	if err != nil {
-		return udp4 + udp6, nil
+		logger.Warning("read udp6 connections failed:", err)
+		return udp4, nil
 	}
 
 	return udp4 + udp6, nil

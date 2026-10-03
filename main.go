@@ -101,8 +101,15 @@ func showSetting(show bool) {
 		}
 		userService := service.UserService{}
 		userModel, err := userService.GetFirstUser()
+		// GetFirstUser 出错时返回 (nil, err)，这里必须中断，
+		// 否则下面的字段访问会以空指针 panic。
 		if err != nil {
 			fmt.Println("get current user info failed,error info:", err)
+			return
+		}
+		if userModel == nil {
+			fmt.Println("current user not found")
+			return
 		}
 		username := userModel.Username
 		userpasswd := userModel.Password

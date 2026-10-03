@@ -2,8 +2,10 @@ package session
 
 import (
 	"encoding/gob"
+
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+
 	"x-ui/database/model"
 )
 
@@ -27,7 +29,12 @@ func GetLoginUser(c *gin.Context) *model.User {
 	if obj == nil {
 		return nil
 	}
-	user := obj.(model.User)
+	// cookie 载荷经 gob 解码，旧版本写入的其他类型或解码异常都会让
+	// 裸断言 panic；IsLogin 在每个 /xui/* 请求上都会走到这里。
+	user, ok := obj.(model.User)
+	if !ok {
+		return nil
+	}
 	return &user
 }
 

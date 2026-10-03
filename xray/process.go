@@ -249,23 +249,35 @@ func (p *process) GetTraffic(reset bool) ([]*Traffic, error) {
 	if err != nil {
 		return nil, err
 	}
-	tagTrafficMap := map[string]*Traffic{}
+	// 键必须含方向：同一个 tag 的 inbound 与 outbound 是两条独立的统计项，
+	// 只按 tag 归并会让后者的值覆盖前者，并把 IsInbound 标成最后一条的方向。
+	type trafficKey struct {
+		isInbound bool
+		tag       string
+	}
+	tagTrafficMap := map[trafficKey]*Traffic{}
 	traffics := make([]*Traffic, 0)
 	for _, stat := range resp.GetStat() {
 		matchs := trafficRegex.FindStringSubmatch(stat.Name)
+		// 统计项由外部 Xray 进程提供，命名不保证符合本正则；
+		// 不判空就直接取下标会以索引越界 panic 掉整个面板进程。
+		if len(matchs) < 4 {
+			continue
+		}
 		isInbound := matchs[1] == "inbound"
 		tag := matchs[2]
 		isDown := matchs[3] == "downlink"
 		if tag == "api" {
 			continue
 		}
-		traffic, ok := tagTrafficMap[tag]
+		key := trafficKey{isInbound: isInbound, tag: tag}
+		traffic, ok := tagTrafficMap[key]
 		if !ok {
 			traffic = &Traffic{
 				IsInbound: isInbound,
 				Tag:       tag,
 			}
-			tagTrafficMap[tag] = traffic
+			tagTrafficMap[key] = traffic
 			traffics = append(traffics, traffic)
 		}
 		if isDown {

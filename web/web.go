@@ -231,47 +231,17 @@ func (s *Server) initI18n(engine *gin.Engine) error {
 		return err
 	}
 
-	findI18nParamNames := func(key string) []string {
-		names := make([]string, 0)
-		keyLen := len(key)
-		for i := 0; i < keyLen-1; i++ {
-			if key[i:i+2] == "{{" { // 判断开头 "{{"
-				j := i + 2
-				isFind := false
-				for ; j < keyLen-1; j++ {
-					if key[j:j+2] == "}}" { // 结尾 "}}"
-						isFind = true
-						break
-					}
-				}
-				if isFind {
-					names = append(names, key[i+3:j])
-				}
-			}
-		}
-		return names
-	}
-
-	var localizer *i18n.Localizer
-
-	engine.FuncMap["i18n"] = func(key string, params ...string) (string, error) {
-		names := findI18nParamNames(key)
-		if len(names) != len(params) {
-			return "", common.NewError("find names:", names, "---------- params:", params, "---------- num not equal")
-		}
-		templateData := map[string]interface{}{}
-		for i := range names {
-			templateData[names[i]] = params[i]
-		}
-		return localizer.Localize(&i18n.LocalizeConfig{
-			MessageID:    key,
-			TemplateData: templateData,
-		})
+	// 本地化函数交给模板数据，由 util.go 的 html() 放进每次请求的数据 map。
+	// 这样它是请求局部的不可变值，不存在跨请求共享：
+	// 原实现在这里放一个包级 *i18n.Localizer，被 per-request 中间件写、
+	// 被模板渲染读，同一响应里会混进两种语言（实测 63/400 次）。
+	// html/template 的函数无法拿到 *gin.Context，所以只能走数据这条路径。
+	engine.FuncMap["i18n"] = func(localizer *i18n.Localizer, key string) (string, error) {
+		return localizer.Localize(&i18n.LocalizeConfig{MessageID: key})
 	}
 
 	engine.Use(func(c *gin.Context) {
-		accept := c.GetHeader("Accept-Language")
-		localizer = i18n.NewLocalizer(bundle, accept)
+		localizer := i18n.NewLocalizer(bundle, c.GetHeader("Accept-Language"))
 		c.Set("localizer", localizer)
 		c.Next()
 	})
@@ -400,6 +370,12 @@ func (s *Server) Stop() error {
 	s.xrayService.StopXray()
 	if s.cron != nil {
 		s.cron.Stop()
+	}
+	// 停止时把待落库的增量写出。采集任务每 10 秒把增量从 Xray 计数器里取走
+	// （GetTraffic 带 reset），落库任务却要等满 1 分钟，因此不在这里补一次
+	// Flush 就会让最多 60 秒的每入站流量永久丢失。
+	if err := service.GetTrafficPanelService().Flush(); err != nil {
+		logger.Warning("flush traffic snapshot on stop failed:", err)
 	}
 	var err1 error
 	var err2 error

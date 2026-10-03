@@ -17,8 +17,8 @@ func NewTrafficPersistJob() *TrafficPersistJob {
 
 func (j *TrafficPersistJob) Run() {
 	panel := service.GetTrafficPanelService()
-	// 落库失败不影响清理：失败原因（只读、磁盘满）不应连带让过期数据永不清理；
-	// Flush 内部已记录告警并把增量回填重试
+	// 落库失败不影响清理：失败原因（只读、磁盘满）不应连带让过期数据永不清理。
+	// Flush 自己负责记告警并把增量回填重试，这里不必重复记录。
 	_ = panel.Flush()
 	if time.Since(j.lastCleanup) >= time.Hour {
 		j.lastCleanup = time.Now()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"embed"
+	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
@@ -246,11 +247,12 @@ func (s *Server) initI18n(engine *gin.Engine) error {
 		// 这时回退成 key 本身，而不是让整页渲染失败。
 		dataMap, ok := data.(map[string]interface{})
 		if !ok {
-			return key, nil
+			panic(fmt.Sprintf("DIAG dot 类型 %T key=%s", data, key))
 		}
-		localizer, ok := dataMap["i18n"].(*i18n.Localizer)
+		raw, present := dataMap["i18n"]
+		localizer, ok := raw.(*i18n.Localizer)
 		if !ok || localizer == nil {
-			return key, nil
+			panic(fmt.Sprintf("DIAG i18n 缺失 present=%v type=%T key=%s", present, raw, key))
 		}
 		return localizer.Localize(&i18n.LocalizeConfig{MessageID: key})
 	}

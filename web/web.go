@@ -238,12 +238,17 @@ func (s *Server) initI18n(engine *gin.Engine) error {
 		if err != nil {
 			return err
 		}
-		_, err = bundle.ParseMessageFileBytes(data, path)
+		tag, err := bundle.ParseMessageFileBytes(data, path)
+		diagLog(fmt.Sprintf("walk path=%s bytes=%d tag=%v err=%v", path, len(data), tag, err))
 		return err
 	})
 	if err != nil {
 		return err
 	}
+	// 验证消息是否真的进了 bundle
+	probe := i18n.NewLocalizer(bundle, "zh-CN")
+	got, perr := probe.Localize(&i18n.LocalizeConfig{MessageID: "username"})
+	diagLog(fmt.Sprintf("bundle 自检 username=%q err=%v", got, perr))
 
 	// 模板里的调用形式必须是 {{ i18n . "key" }}：
 	//   - localizer 由 util.go 的 html() 放进每次请求的数据 map，请求局部、不可变，

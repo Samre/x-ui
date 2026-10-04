@@ -99,7 +99,15 @@ func TestLoginPageLocalized(t *testing.T) {
 		if !strings.Contains(body, c.want) {
 			t.Fatalf("%s 期望页面含 %q，实际: %s", c.accept, c.want, trimBody(body, 400))
 		}
-		// 反向断言：守卫回退时会原样输出 key，这里必须没有
+		// 反向断言：守卫回退时会原样输出 key，这里必须没有。
+		// 失败时把 username 附近的实际字节打出来，避免靠猜。
+		if idx := strings.Index(body, "placeholder"); idx >= 0 {
+			end := idx + 60
+			if end > len(body) {
+				end = len(body)
+			}
+			t.Logf("%s placeholder 片段: %q", c.accept, body[idx:end])
+		}
 		if strings.Contains(body, "placeholder='username'") {
 			t.Fatalf("%s 本地化被回退成字面量 key", c.accept)
 		}

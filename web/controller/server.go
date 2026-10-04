@@ -6,6 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"x-ui/logger"
 	"x-ui/web/global"
 	"x-ui/web/service"
 )
@@ -54,8 +55,19 @@ func (a *ServerController) refreshStatus() {
 }
 
 func (a *ServerController) startTask() {
+	// 顺序是先 initRouter（这里会建 controller）再 Start（那里才创建 cron），
+	// 因此取到的 cron 可能为 nil——生产路径靠 main.go 里的 global.SetWebServer
+	// 兜着，重排或单测里就会直接空指针。这里跳过而不是崩，并且不丢日志。
 	webServer := global.GetWebServer()
+	if webServer == nil {
+		logger.Warning("web server 未注册，跳过 status 刷新任务注册")
+		return
+	}
 	c := webServer.GetCron()
+	if c == nil {
+		logger.Warning("cron 尚未创建，跳过 status 刷新任务注册")
+		return
+	}
 	c.AddFunc("@every 2s", func() {
 		a.mutex.Lock()
 		idle := time.Since(a.lastGetStatusTime) > time.Minute*3

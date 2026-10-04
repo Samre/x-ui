@@ -33,8 +33,17 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 }
 
 func (a *InboundController) startTask() {
+	// 同 ServerController.startTask：此刻 cron 可能还没创建
 	webServer := global.GetWebServer()
+	if webServer == nil {
+		logger.Warning("web server 未注册，跳过 xray 重启任务注册")
+		return
+	}
 	c := webServer.GetCron()
+	if c == nil {
+		logger.Warning("cron 尚未创建，跳过 xray 重启任务注册")
+		return
+	}
 	c.AddFunc("@every 10s", func() {
 		if a.xrayService.IsNeedRestartAndSetFalse() {
 			err := a.xrayService.RestartXray(false)

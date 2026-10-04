@@ -85,7 +85,11 @@ func html(c *gin.Context, name string, title string, data gin.H) {
 	if localizer, ok := c.Get("localizer"); ok {
 		if l, ok := localizer.(*i18n.Localizer); ok && l != nil {
 			data["i18n"] = l
+		} else {
+			logger.Warningf("DIAG localizer 类型不符: %T", localizer)
 		}
+	} else {
+		logger.Warning("DIAG 上下文里没有 localizer")
 	}
 	c.HTML(http.StatusOK, name, getContext(data))
 }

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"x-ui/database"
+	"x-ui/web/global"
 )
 
 func newTestServer(t *testing.T) *Server {
@@ -27,7 +28,12 @@ func newTestServer(t *testing.T) *Server {
 	if err := database.InitDB(dbPath); err != nil {
 		t.Fatalf("init test db failed: %v", err)
 	}
-	return NewServer()
+	s := NewServer()
+	// main.go 在 server.Start() 之前会 global.SetWebServer(server)：
+	// initRouter -> NewServerController -> startTask 会通过全局取 cron，
+	// 不设置就是空指针。测试必须复刻这一步，否则走不到渲染。
+	global.SetWebServer(s)
+	return s
 }
 
 func performGet(engine http.Handler, path string, accept string) *httptest.ResponseRecorder {

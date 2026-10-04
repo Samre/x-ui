@@ -231,12 +231,27 @@ func (s *Server) initI18n(engine *gin.Engine) error {
 		return err
 	}
 
-	// 本地化函数交给模板数据，由 util.go 的 html() 放进每次请求的数据 map。
-	// 这样它是请求局部的不可变值，不存在跨请求共享：
-	// 原实现在这里放一个包级 *i18n.Localizer，被 per-request 中间件写、
-	// 被模板渲染读，同一响应里会混进两种语言（实测 63/400 次）。
-	// html/template 的函数无法拿到 *gin.Context，所以只能走数据这条路径。
-	engine.FuncMap["i18n"] = func(localizer *i18n.Localizer, key string) (string, error) {
+	// 模板里的调用形式必须是 {{ i18n . "key" }}：
+	//   - localizer 由 util.go 的 html() 放进每次请求的数据 map，请求局部、不可变，
+	//     因此不存在跨请求共享（原实现用包级变量，被中间件写、被渲染读，
+	//     同一响应会混进两种语言，实测 63/400 次）；
+	//   - 必须走 FuncMap 并把 localizer 当参数传入。实测 {{ .localize "key" }}
+	//     在 map/具名 map/struct 各种数据形状下都会报
+	//     "localize is not a method but has arguments" —— Go 模板不支持调用
+	//     存放在数据里的函数值；
+	//   - 代价是拿到 nil dot 的模板无法本地化，所以 include 时必须传 dot。
+	engine.FuncMap["i18n"] = func(data interface{}, key string) (string, error) {
+		// dot 就是本次请求的数据 map（gin.H），localizer 在其中的 "i18n" 键下。
+		// 拿到 nil dot 的模板（例如遗漏传 dot 的 include）无法本地化：
+		// 这时回退成 key 本身，而不是让整页渲染失败。
+		dataMap, ok := data.(map[string]interface{})
+		if !ok {
+			return key, nil
+		}
+		localizer, ok := dataMap["i18n"].(*i18n.Localizer)
+		if !ok || localizer == nil {
+			return key, nil
+		}
 		return localizer.Localize(&i18n.LocalizeConfig{MessageID: key})
 	}
 

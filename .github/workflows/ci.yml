@@ -22,9 +22,11 @@ jobs:
           go-version: '1.27'
       - name: go vet
         run: go vet ./...
-      # 这两个包的测试是纯计算的，不打开数据库，也不需要 C 编译器
+      # ./web 是模板渲染回归测试：它走真实 initRouter，能拦住
+      # "模板调用形式写错导致整页空白" 这类只在运行时暴露的问题
+      # （0.6.7 曾因此让登录页渲染失败）。
       - name: go test
-        run: go test ./database/model/... ./web/service/...
+        run: go test ./database/model/... ./web/service/... ./web/
 
   race:
     name: go test -race
@@ -40,4 +42,4 @@ jobs:
       - name: go test -race
         env:
           CGO_ENABLED: '1'
-        run: go test -race ./database/model/... ./web/service/...
+        run: go test -race ./database/model/... ./web/service/... ./web/

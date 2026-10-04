@@ -211,6 +211,24 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	return engine, nil
 }
 
+// DIAG 临时：把诊断写到文件，go test 通过时不会显示 stdout
+func diagLog(msg string) {
+	f, err := os.OpenFile("/tmp/xui-diag.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	f.WriteString(msg + "\n")
+}
+
+func keysOfMap(m map[string]interface{}) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
+}
+
 func (s *Server) initI18n(engine *gin.Engine) error {
 	bundle := i18n.NewBundle(language.SimplifiedChinese)
 	bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
@@ -247,13 +265,16 @@ func (s *Server) initI18n(engine *gin.Engine) error {
 		// 这时回退成 key 本身，而不是让整页渲染失败。
 		dataMap, ok := data.(map[string]interface{})
 		if !ok {
-			panic(fmt.Sprintf("DIAG dot 类型 %T key=%s", data, key))
+			diagLog(fmt.Sprintf("dot 类型 %T key=%s", data, key))
+			return key, nil
 		}
 		raw, present := dataMap["i18n"]
 		localizer, ok := raw.(*i18n.Localizer)
 		if !ok || localizer == nil {
-			panic(fmt.Sprintf("DIAG i18n 缺失 present=%v type=%T key=%s", present, raw, key))
+			diagLog(fmt.Sprintf("i18n 缺失 present=%v type=%T key=%s keys=%v", present, raw, key, keysOfMap(dataMap)))
+			return key, nil
 		}
+		diagLog(fmt.Sprintf("命中 key=%s -> %s", key, "ok"))
 		return localizer.Localize(&i18n.LocalizeConfig{MessageID: key})
 	}
 

@@ -82,16 +82,23 @@ func html(c *gin.Context, name string, title string, data gin.H) {
 	// 注意：不能暴露成 {{ .localize "key" }}——Go 模板把那种形式解析成
 	// "方法调用 + 参数"，而 map 里存的函数值不被支持，实测必然报错。
 	// 因此这里只放 localizer 本身，本地化统一走 web.go 注册的 i18n 函数。
+	// DIAG
 	if localizer, ok := c.Get("localizer"); ok {
 		if l, ok := localizer.(*i18n.Localizer); ok && l != nil {
 			data["i18n"] = l
 		} else {
-			logger.Warningf("DIAG localizer 类型不符: %T", localizer)
+			logger.Warningf("DIAG localizer 类型 %T", localizer)
 		}
 	} else {
 		logger.Warning("DIAG 上下文里没有 localizer")
 	}
-	c.HTML(http.StatusOK, name, getContext(data))
+	ctxData := getContext(data)
+	if v, has := ctxData["i18n"]; has {
+		logger.Warningf("DIAG getContext 后 i18n 类型=%T key=%s", v, name)
+	} else {
+		logger.Warningf("DIAG getContext 丢了 i18n key=%s", name)
+	}
+	c.HTML(http.StatusOK, name, ctxData)
 }
 
 func getContext(h gin.H) gin.H {

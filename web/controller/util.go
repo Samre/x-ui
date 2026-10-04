@@ -78,19 +78,13 @@ func html(c *gin.Context, name string, title string, data gin.H) {
 	data["title"] = title
 	data["request_uri"] = c.Request.RequestURI
 	data["base_path"] = c.GetString("base_path")
-	// 把本次请求的 localizer 绑进模板数据：模板用 {{ .localize "key" }} 本地化。
-	// 模板函数拿不到请求上下文，而共享变量会让并发请求互相串台。
+	// 把本次请求的 localizer 放进数据 map，供模板以 {{ i18n . "key" }} 调用。
+	// 注意：不能暴露成 {{ .localize "key" }}——Go 模板把那种形式解析成
+	// "方法调用 + 参数"，而 map 里存的函数值不被支持，实测必然报错。
+	// 因此这里只放 localizer 本身，本地化统一走 web.go 注册的 i18n 函数。
 	if localizer, ok := c.Get("localizer"); ok {
 		if l, ok := localizer.(*i18n.Localizer); ok && l != nil {
-			// 找不到消息时回退成 key 本身：与其让页面渲染失败，
-			// 不如显示 key 便于定位缺失的翻译项。
-			data["localize"] = func(key string) string {
-				msg, err := l.Localize(&i18n.LocalizeConfig{MessageID: key})
-				if err != nil {
-					return key
-				}
-				return msg
-			}
+			data["i18n"] = l
 		}
 	}
 	c.HTML(http.StatusOK, name, getContext(data))

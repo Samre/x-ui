@@ -26,7 +26,7 @@ jobs:
       # "模板调用形式写错导致整页空白" 这类只在运行时暴露的问题
       # （0.6.7 曾因此让登录页渲染失败）。
       - name: go test
-        run: go test -v ./database/model/... ./web/service/... ./web/
+        run: go test ./database/model/... ./web/service/... ./web/
 
   race:
     name: go test -race

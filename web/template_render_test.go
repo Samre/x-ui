@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -108,6 +109,12 @@ func TestLoginPageLocalized(t *testing.T) {
 			}
 			t.Logf("%s placeholder 片段: %q", c.accept, body[idx:end])
 		}
+		fmt.Fprintf(os.Stderr, "DIAG 测试 %s: 含MARKER=%v 含期望=%v 含字面量=%v 长度=%d\n",
+			c.accept,
+			strings.Contains(body, "MARKER-LOGIN-TEMPLATE"),
+			strings.Contains(body, c.want),
+			strings.Contains(body, "placeholder='username'"),
+			len(body))
 		if strings.Contains(body, "placeholder='username'") {
 			t.Fatalf("%s 本地化被回退成字面量 key", c.accept)
 		}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"embed"
-	"fmt"
 	"html/template"
 	"io"
 	"io/fs"
@@ -13,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"x-ui/config"
 	"x-ui/logger"
@@ -211,19 +211,6 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	return engine, nil
 }
 
-// DIAG 临时：把诊断写到文件，go test 通过时不会显示 stdout
-func diagLog(msg string) {
-	fmt.Fprintln(os.Stderr, "DIAG "+msg)
-}
-
-func keysOfMap(m map[string]interface{}) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	return ks
-}
-
 func (s *Server) initI18n(engine *gin.Engine) error {
 	bundle := i18n.NewBundle(language.SimplifiedChinese)
 	bundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
@@ -238,48 +225,41 @@ func (s *Server) initI18n(engine *gin.Engine) error {
 		if err != nil {
 			return err
 		}
-		tag, err := bundle.ParseMessageFileBytes(data, path)
-		diagLog(fmt.Sprintf("walk path=%s bytes=%d tag=%v err=%v", path, len(data), tag, err))
+		_, err = bundle.ParseMessageFileBytes(data, path)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	// 验证消息是否真的进了 bundle
-	probe := i18n.NewLocalizer(bundle, "zh-CN")
-	got, perr := probe.Localize(&i18n.LocalizeConfig{MessageID: "username"})
-	diagLog(fmt.Sprintf("bundle 自检 username=%q err=%v", got, perr))
 
-	// 模板里的调用形式必须是 {{ i18n . "key" }}：
-	//   - localizer 由 util.go 的 html() 放进每次请求的数据 map，请求局部、不可变，
-	//     因此不存在跨请求共享（原实现用包级变量，被中间件写、被渲染读，
-	//     同一响应会混进两种语言，实测 63/400 次）；
-	//   - 必须走 FuncMap 并把 localizer 当参数传入。实测 {{ .localize "key" }}
-	//     在 map/具名 map/struct 各种数据形状下都会报
-	//     "localize is not a method but has arguments" —— Go 模板不支持调用
-	//     存放在数据里的函数值；
-	//   - 代价是拿到 nil dot 的模板无法本地化，所以 include 时必须传 dot。
-	engine.FuncMap["i18n"] = func(data interface{}, key string) (string, error) {
-		// dot 就是本次请求的数据 map（gin.H），localizer 在其中的 "i18n" 键下。
-		// 拿到 nil dot 的模板（例如遗漏传 dot 的 include）无法本地化：
-		// 这时回退成 key 本身，而不是让整页渲染失败。
-		dataMap, ok := data.(map[string]interface{})
-		if !ok {
-			diagLog(fmt.Sprintf("dot 类型 %T key=%s", data, key))
+	// 模板里用 {{ i18n "key" }} 调用，localizer 由下面的中间件按请求写入。
+	//
+	// 为什么是可变变量 + 互斥锁，而不是把 localizer 放进模板数据：
+	//   - Go 模板函数拿不到 *gin.Context，localizer 只能走共享状态；
+	//   - 试过 {{ .localize "key" }}（函数值放数据 map）：实测所有数据形状下都报
+	//     "localize is not a method but has arguments"；
+	//   - 试过 {{ i18n . "key" }}（把 dot 当参数传）：modal 那批模板是被
+	//     {{template "x"}} 以 nil dot 包含的，拿不到 localizer，
+	//     文案会静默退化成 key。
+	//
+	// 原实现就是这个共享变量，缺陷在于"中间件写 / 模板渲染读"没有同步，
+	// 并发下同一响应会混进两种语言（实测 63/400 次）。这里用 renderMutex 把
+	// "设置 localizer + 完成渲染"串起来：锁覆盖 c.Next()，渲染结束前别的请求
+	// 改不了它。代价是页面渲染串行化，对面板而言可以接受。
+	var localizer *i18n.Localizer
+	var renderMutex sync.Mutex
+
+	engine.FuncMap["i18n"] = func(key string) (string, error) {
+		if localizer == nil {
 			return key, nil
 		}
-		raw, present := dataMap["i18n"]
-		localizer, ok := raw.(*i18n.Localizer)
-		if !ok || localizer == nil {
-			diagLog(fmt.Sprintf("i18n 缺失 present=%v type=%T key=%s keys=%v", present, raw, key, keysOfMap(dataMap)))
-			return key, nil
-		}
-		diagLog(fmt.Sprintf("命中 key=%s -> %s", key, "ok"))
 		return localizer.Localize(&i18n.LocalizeConfig{MessageID: key})
 	}
 
 	engine.Use(func(c *gin.Context) {
-		localizer := i18n.NewLocalizer(bundle, c.GetHeader("Accept-Language"))
+		renderMutex.Lock()
+		defer renderMutex.Unlock()
+		localizer = i18n.NewLocalizer(bundle, c.GetHeader("Accept-Language"))
 		c.Set("localizer", localizer)
 		c.Next()
 	})

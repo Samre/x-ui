@@ -1,19 +1,19 @@
 package web
 
 // 模板渲染回归测试。
-// 背景：i18n 改造时把调用形式写成 {{ .localize "key" }}，而 Go 模板不支持调用
+//
+// 背景：i18n 改造时把模板调用改成 {{ .localize "key" }}，而 Go 模板不支持调用
 // 存放在数据 map 里的函数值，会报 "localize is not a method but has arguments"，
-// 结果是登录页等 6 个模板整页渲染失败、页面空白。当时的 CI 只跑 go vet + 单测，
-// 没有渲染过模板，所以没能拦住。
+// 结果登录页等 6 个模板整页渲染失败、面板打不开。当时的 CI 只跑 go vet + 单测，
+// 从没渲染过模板，所以没能拦住。
 //
 // 这个测试特意走**生产路径**（NewServer + initRouter），而不是自己拼一个
-// FuncMap——自己拼的话，web.go 里 i18n 的签名改坏了它也发现不了。
+// FuncMap——自己拼的话，web.go 里 i18n 的实现改坏了它也发现不了。
 
 import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -54,7 +54,8 @@ func trimBody(s string, n int) string {
 	return s[:n] + "...(截断)"
 }
 
-// 每个页面都必须渲染出完整 HTML，而不是空白或 500。
+// 未登录访问首页必须渲染出完整 HTML，而不是空白或 500。
+// 登录页就是 GET /（POST /login 是提交接口）。
 func TestPagesRender(t *testing.T) {
 	s := newTestServer(t)
 	engine, err := s.initRouter()
@@ -62,21 +63,17 @@ func TestPagesRender(t *testing.T) {
 		t.Fatalf("initRouter failed: %v", err)
 	}
 
-	// 登录页是 GET /（未登录时渲染 login.html）；POST /login 是提交接口，
-	// 不在这里测。
-	for _, path := range []string{"/"} {
-		rec := performGet(engine, path, "zh-CN")
-		if rec.Code != http.StatusOK {
-			t.Fatalf("GET %s -> %d, body: %s", path, rec.Code, trimBody(rec.Body.String(), 300))
-		}
-		body := rec.Body.String()
-		if len(body) < 500 || !strings.Contains(body, "<html") {
-			t.Fatalf("GET %s 渲染结果不是完整 HTML（%d 字节）: %s", path, len(body), trimBody(body, 300))
-		}
+	rec := performGet(engine, "/", "zh-CN")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET / -> %d, body: %s", rec.Code, trimBody(rec.Body.String(), 300))
+	}
+	body := rec.Body.String()
+	if len(body) < 500 || !strings.Contains(body, "<html") {
+		t.Fatalf("GET / 渲染结果不是完整 HTML（%d 字节）: %s", len(body), trimBody(body, 300))
 	}
 }
 
-// 中文与英文请求必须拿到各自的文案，而不是回退成 key。
+// 中英文请求各自拿到对应文案，而不是退化成 key。
 func TestLoginPageLocalized(t *testing.T) {
 	s := newTestServer(t)
 	engine, err := s.initRouter()
@@ -85,11 +82,14 @@ func TestLoginPageLocalized(t *testing.T) {
 	}
 
 	cases := []struct {
-		accept string
-		want   string
+		accept    string
+		want      string
+		notWanted string
 	}{
-		{"zh-CN", "登录"},
-		{"en-US", "login"},
+		// placeholder 渲染成 placeholder='用户名'
+		{"zh-CN", "用户名", "placeholder='username'"},
+		// 英文包里 username 字面就是 username，用登录按钮文案更可靠
+		{"en-US", ">login<", "placeholder='密码'"},
 	}
 	for _, c := range cases {
 		rec := performGet(engine, "/", c.accept)
@@ -100,29 +100,13 @@ func TestLoginPageLocalized(t *testing.T) {
 		if !strings.Contains(body, c.want) {
 			t.Fatalf("%s 期望页面含 %q，实际: %s", c.accept, c.want, trimBody(body, 400))
 		}
-		// 反向断言：守卫回退时会原样输出 key，这里必须没有。
-		// 失败时把 username 附近的实际字节打出来，避免靠猜。
-		if idx := strings.Index(body, "placeholder"); idx >= 0 {
-			end := idx + 60
-			if end > len(body) {
-				end = len(body)
-			}
-			t.Logf("%s placeholder 片段: %q", c.accept, body[idx:end])
-		}
-		fmt.Fprintf(os.Stderr, "DIAG 测试 %s: 含MARKER=%v 含期望=%v 含字面量=%v 长度=%d\n",
-			c.accept,
-			strings.Contains(body, "MARKER-LOGIN-TEMPLATE"),
-			strings.Contains(body, c.want),
-			strings.Contains(body, "placeholder='username'"),
-			len(body))
-		if strings.Contains(body, "placeholder='username'") {
-			t.Fatalf("%s 本地化被回退成字面量 key", c.accept)
+		if strings.Contains(body, c.notWanted) {
+			t.Fatalf("%s 页面出现不该有的 %q（本地化未生效）", c.accept, c.notWanted)
 		}
 	}
 }
 
-// 会话 cookie 缺 HttpOnly/Secure 时会随语言切换而丢失，这里顺带记录：
-// 未登录访问 /xui/inbounds 会跳转，因此跳过而非失败。
+// /xui/inbounds 需要登录，未登录会跳转；能拿到 200 时断言 modal 文案已本地化。
 func TestInboundsPageModalsLocalized(t *testing.T) {
 	s := newTestServer(t)
 	engine, err := s.initRouter()
@@ -136,6 +120,6 @@ func TestInboundsPageModalsLocalized(t *testing.T) {
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "关闭") {
-		t.Fatalf("inbounds 页的 modal 未本地化（缺「关闭」），说明 include 漏传 dot: %s", trimBody(body, 400))
+		t.Fatalf("inbounds 页的 modal 未本地化（缺「关闭」）: %s", trimBody(body, 400))
 	}
 }

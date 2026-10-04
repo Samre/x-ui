@@ -1,10 +1,12 @@
 package controller
 
 import (
+	"fmt"
 	"github.com/gin-gonic/gin"
 	"github.com/nicksnyder/go-i18n/v2/i18n"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"x-ui/config"
 	"x-ui/logger"
@@ -82,22 +84,20 @@ func html(c *gin.Context, name string, title string, data gin.H) {
 	// 注意：不能暴露成 {{ .localize "key" }}——Go 模板把那种形式解析成
 	// "方法调用 + 参数"，而 map 里存的函数值不被支持，实测必然报错。
 	// 因此这里只放 localizer 本身，本地化统一走 web.go 注册的 i18n 函数。
-	// DIAG
-	if localizer, ok := c.Get("localizer"); ok {
-		if l, ok := localizer.(*i18n.Localizer); ok && l != nil {
-			data["i18n"] = l
-		} else {
-			logger.Warningf("DIAG localizer 类型 %T", localizer)
-		}
+	// DIAG（直接写 stderr，logger 未初始化时看不到）
+	raw, present := c.Get("localizer")
+	setI18n := false
+	if !present {
+		fmt.Fprintln(os.Stderr, "DIAG util: 上下文无 localizer")
+	} else if l, ok := raw.(*i18n.Localizer); ok && l != nil {
+		data["i18n"] = l
+		setI18n = true
 	} else {
-		logger.Warning("DIAG 上下文里没有 localizer")
+		fmt.Fprintf(os.Stderr, "DIAG util: localizer 不可用 present=%v type=%T\n", present, raw)
 	}
 	ctxData := getContext(data)
-	if v, has := ctxData["i18n"]; has {
-		logger.Warningf("DIAG getContext 后 i18n 类型=%T key=%s", v, name)
-	} else {
-		logger.Warningf("DIAG getContext 丢了 i18n key=%s", name)
-	}
+	v, has := ctxData["i18n"]
+	fmt.Fprintf(os.Stderr, "DIAG util: name=%s set=%v has=%v type=%T isNil=%v\n", name, setI18n, has, v, v == nil)
 	c.HTML(http.StatusOK, name, ctxData)
 }
 

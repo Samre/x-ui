@@ -61,7 +61,9 @@ func TestPagesRender(t *testing.T) {
 		t.Fatalf("initRouter failed: %v", err)
 	}
 
-	for _, path := range []string{"/", "/login"} {
+	// 登录页是 GET /（未登录时渲染 login.html）；POST /login 是提交接口，
+	// 不在这里测。
+	for _, path := range []string{"/"} {
 		rec := performGet(engine, path, "zh-CN")
 		if rec.Code != http.StatusOK {
 			t.Fatalf("GET %s -> %d, body: %s", path, rec.Code, trimBody(rec.Body.String(), 300))
@@ -89,9 +91,9 @@ func TestLoginPageLocalized(t *testing.T) {
 		{"en-US", "login"},
 	}
 	for _, c := range cases {
-		rec := performGet(engine, "/login", c.accept)
+		rec := performGet(engine, "/", c.accept)
 		if rec.Code != http.StatusOK {
-			t.Fatalf("%s GET /login -> %d", c.accept, rec.Code)
+			t.Fatalf("%s GET / -> %d", c.accept, rec.Code)
 		}
 		body := rec.Body.String()
 		if !strings.Contains(body, c.want) {

@@ -213,12 +213,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 
 // DIAG 临时：把诊断写到文件，go test 通过时不会显示 stdout
 func diagLog(msg string) {
-	f, err := os.OpenFile("/tmp/xui-diag.log", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	f.WriteString(msg + "\n")
+	fmt.Fprintln(os.Stderr, "DIAG "+msg)
 }
 
 func keysOfMap(m map[string]interface{}) []string {

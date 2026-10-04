@@ -61,9 +61,13 @@ func TestDiagLocalize(t *testing.T) {
 	}
 
 	// 真实渲染片段
-	body := performGet(engine, "/", "zh-CN").Body.String()
-	if i := indexOf(body, "placeholder"); i >= 0 {
-		t.Logf("渲染片段: %q", body[i:minInt(i+45, len(body))])
+	engine2, err := s.initRouter()
+	if err == nil {
+		body := performGet(engine2, "/", "zh-CN").Body.String()
+		if i := indexOf(body, "placeholder"); i >= 0 {
+			fmt.Fprintln(os.Stderr, "DIAG 渲染片段:", body[i:minInt(i+45, len(body))])
+		}
+		fmt.Fprintln(os.Stderr, "DIAG 页面字节数:", len(body))
 	}
 }
 
